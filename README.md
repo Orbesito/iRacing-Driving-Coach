@@ -50,20 +50,38 @@ If `python` is not available:
 py .\TelemetryAnalyzer.py "C:\path\to\mu_exported_session.csv"
 ```
 
-Optional flags:
+No extra inputs are required for lap processing or saving. The script always:
 
-- `--preview-rows 10` to change preview size.
-- `--no-derived` to skip derived channels.
-- `--out-dir ".\outputs\session_001"` to save processed artifacts for the next pipeline stages.
+- applies derived channels,
+- detects valid laps deterministically,
+- ignores out/warm-up and short/partial laps,
+- aligns valid laps by distance (`LapDistPct`),
+- saves outputs for next stages.
 
-## Saved Artifacts (Optional)
+## Saved Artifacts
 
-If `--out-dir` is provided, the tool saves:
+Every run saves artifacts in a session-specific folder:
 
-- `telemetry_numeric.csv`
-- `metadata.json`
-- `units.json`
-- `parse_report.json`
+- `outputs/<session-id>/telemetry_numeric.csv`
+- `outputs/<session-id>/metadata.json`
+- `outputs/<session-id>/units.json`
+- `outputs/<session-id>/parse_report.json`
+- `outputs/<session-id>/laps/lap_summary.csv`
+- `outputs/<session-id>/laps/aligned_laps_by_distance.csv`
+- `outputs/<session-id>/laps/alignment_report.json`
+
+`<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
+
+## Lap Comparison Approach
+
+- Laps are classified as valid/invalid using deterministic rules:
+  - lap ID must be >= 1 (ignores lap 0 out/warm-up by default),
+  - enough telemetry samples (`>= 1000`),
+  - sufficient distance coverage (`start <= 1%`, `end >= 99%`, span `>= 95%`),
+  - no pit-road contamination (`OnPitRoad` fraction must be `0` when channel exists),
+  - lap must be mostly on track (`IsOnTrack` fraction `>= 0.99` when channel exists).
+- Comparisons are done by `LapDistPct` distance alignment, not by time.
+- Valid laps are interpolated onto a shared distance grid (`0.1%` step) for direct point-by-point comparison.
 
 ## Mu Export Format Expected
 
