@@ -1,3 +1,14 @@
+"""
+TelemetryAnalyzer.py
+
+Deterministic ingestion utility for Mu-exported iRacing CSV telemetry.
+MVP scope:
+1. Parse metadata/header/units
+2. Load numeric telemetry samples
+3. Add selected derived channels without overwriting raw channels
+4. Print a compact, auditable session summary
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -19,10 +30,12 @@ except ModuleNotFoundError as exc:
 
 
 def _is_blank_row(row: List[str]) -> bool:
+    """Return True when a CSV row has no non-whitespace content."""
     return not any(cell.strip() for cell in row)
 
 
 def _normalise_metadata_value(values: List[str]) -> str:
+    """Normalize metadata values into a single printable string."""
     cleaned = [value.strip() for value in values if value.strip()]
     return ", ".join(cleaned)
 
@@ -35,6 +48,7 @@ def _parse_mu_preamble(path: Path) -> Tuple[Dict[str, str], List[str], List[str]
     header: List[str] | None = None
     units: List[str] | None = None
     data_start_row: int | None = None
+    # Explicit parser state keeps the CSV preamble logic deterministic and easy to audit.
     state = "metadata"
 
     with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
@@ -51,6 +65,7 @@ def _parse_mu_preamble(path: Path) -> Tuple[Dict[str, str], List[str], List[str]
                 continue
 
             if state == "seek_header":
+                # Allow any number of blank lines before the header row.
                 if _is_blank_row(row):
                     continue
                 header = row
@@ -70,6 +85,7 @@ def _parse_mu_preamble(path: Path) -> Tuple[Dict[str, str], List[str], List[str]
                 continue
 
             if state == "seek_data":
+                # First non-blank row after units is the telemetry data start.
                 if _is_blank_row(row):
                     continue
                 data_start_row = row_number
@@ -84,6 +100,13 @@ def _parse_mu_preamble(path: Path) -> Tuple[Dict[str, str], List[str], List[str]
 
 
 def load_mu_csv(path: str | Path):
+    """
+    Load a Mu-exported CSV into:
+    - metadata map
+    - units map
+    - numeric telemetry dataframe
+    - parse report summary
+    """
     path = Path(path)
     metadata, header, units, data_start_row = _parse_mu_preamble(path)
 
@@ -97,6 +120,7 @@ def load_mu_csv(path: str | Path):
         on_bad_lines="error",
     )
 
+    # Coerce telemetry values to numeric while preserving deterministic NaN behavior.
     df = df.apply(pd.to_numeric, errors="coerce")
     raw_rows_loaded = len(df)
     df = df.dropna(how="all").reset_index(drop=True)
@@ -114,6 +138,11 @@ def load_mu_csv(path: str | Path):
 
 
 def add_derived_units(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, str]]:
+    """
+    Add derived channels and return both:
+    - updated dataframe
+    - units for the derived channels
+    """
     df = df.copy()
     derived_units: Dict[str, str] = {}
 
@@ -126,6 +155,7 @@ def add_derived_units(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, str]]:
     for source_col, derived_col, factor, derived_unit in conversions:
         if source_col not in df.columns:
             continue
+        # Never overwrite an existing channel: raw and derived channels stay separate.
         if derived_col in df.columns:
             raise ValueError(
                 f"Refusing to overwrite existing telemetry column: {derived_col}"
@@ -137,6 +167,7 @@ def add_derived_units(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, str]]:
 
 
 def main():
+    """CLI entrypoint for loading and inspecting a Mu telemetry session."""
     parser = argparse.ArgumentParser(
         description="Load and validate a Mu-exported iRacing CSV session file."
     )
