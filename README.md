@@ -54,6 +54,16 @@ Optional flags:
 
 - `--preview-rows 10` to change preview size.
 - `--no-derived` to skip derived channels.
+- `--out-dir ".\outputs\session_001"` to save processed artifacts for the next pipeline stages.
+
+## Saved Artifacts (Optional)
+
+If `--out-dir` is provided, the tool saves:
+
+- `telemetry_numeric.csv`
+- `metadata.json`
+- `units.json`
+- `parse_report.json`
 
 ## Mu Export Format Expected
 
