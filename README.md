@@ -56,6 +56,10 @@ No extra inputs are required for lap processing or saving. The script always:
 - detects valid laps deterministically,
 - ignores out/warm-up and short/partial laps,
 - aligns valid laps by distance (`LapDistPct`),
+- includes acceleration channels (`LatAccel`, `LongAccel`) in analysis,
+- detects main corners from a deterministic multi-signal profile (speed, yaw, lateral accel, steering),
+- segments each corner into braking, rotation, and traction phases,
+- computes per-corner coaching metrics and ranking,
 - saves outputs for next stages.
 
 ## Saved Artifacts
@@ -69,6 +73,10 @@ Every run saves artifacts in a session-specific folder:
 - `outputs/<session-id>/laps/lap_summary.csv`
 - `outputs/<session-id>/laps/aligned_laps_by_distance.csv`
 - `outputs/<session-id>/laps/alignment_report.json`
+- `outputs/<session-id>/corners/corner_definitions.csv`
+- `outputs/<session-id>/corners/corner_lap_metrics.csv`
+- `outputs/<session-id>/corners/corner_ranking.csv`
+- `outputs/<session-id>/corners/corner_report.json`
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
 
@@ -82,6 +90,23 @@ Every run saves artifacts in a session-specific folder:
   - lap must be mostly on track (`IsOnTrack` fraction `>= 0.99` when channel exists).
 - Comparisons are done by `LapDistPct` distance alignment, not by time.
 - Valid laps are interpolated onto a shared distance grid (`0.1%` step) for direct point-by-point comparison.
+
+## Corner Coaching Metrics
+
+- Corner apexes are detected deterministically from local peaks in a corner-activity score combining:
+  - speed deficit,
+  - yaw-rate demand,
+  - lateral acceleration,
+  - steering demand.
+- Corner boundaries are defined from neighboring apex midpoints.
+- Per-corner phase boundaries are represented as:
+  - braking phase (`brake_start_pct` to `brake_end_pct`)
+  - rotation phase (`rotation_start_pct` to `rotation_end_pct`, around apex)
+  - traction phase (`traction_start_pct` to `corner_end_pct`)
+- Per-corner ranking supports:
+  - time loss vs reference lap
+  - variability / inconsistency
+  - combined coaching relevance score
 
 ## Mu Export Format Expected
 

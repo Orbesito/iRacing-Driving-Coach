@@ -149,3 +149,34 @@ def save_lap_analysis(
         "aligned_laps_csv": aligned_laps_path,
         "alignment_report_json": alignment_report_path,
     }
+
+
+def save_corner_analysis(
+    out_dir: str | Path,
+    corner_definitions_df: pd.DataFrame,
+    corner_lap_metrics_df: pd.DataFrame,
+    corner_ranking_df: pd.DataFrame,
+    corner_report: dict,
+) -> Dict[str, Path]:
+    """
+    Persist per-corner definitions, per-lap corner metrics, and coaching ranking outputs.
+    """
+    output_dir = Path(out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    corner_definitions_path = output_dir / "corner_definitions.csv"
+    corner_lap_metrics_path = output_dir / "corner_lap_metrics.csv"
+    corner_ranking_path = output_dir / "corner_ranking.csv"
+    corner_report_path = output_dir / "corner_report.json"
+
+    corner_definitions_df.to_csv(corner_definitions_path, index=False)
+    corner_lap_metrics_df.to_csv(corner_lap_metrics_path, index=False)
+    corner_ranking_df.to_csv(corner_ranking_path, index=False)
+    _write_json(corner_report_path, corner_report)
+
+    return {
+        "corner_definitions_csv": corner_definitions_path,
+        "corner_lap_metrics_csv": corner_lap_metrics_path,
+        "corner_ranking_csv": corner_ranking_path,
+        "corner_report_json": corner_report_path,
+    }

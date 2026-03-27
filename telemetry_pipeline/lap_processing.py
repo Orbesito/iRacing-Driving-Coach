@@ -33,6 +33,8 @@ DEFAULT_ALIGNMENT_CHANNELS = [
     "YawRate_deg_s",
     "LatAccel",
     "LongAccel",
+    "Lat",
+    "Lon",
     "Gear",
     "RPM",
 ]

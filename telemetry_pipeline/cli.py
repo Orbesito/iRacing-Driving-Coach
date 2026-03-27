@@ -4,6 +4,15 @@ import argparse
 import sys
 from pathlib import Path
 
+import pandas as pd
+
+from .corner_metrics import (
+    CornerDetectionConfig,
+    choose_reference_lap,
+    compute_corner_metrics,
+    compute_lap_times,
+    detect_main_corners,
+)
 from .derived_channels import add_derived_units
 from .io_mu_csv import load_mu_csv
 from .lap_processing import (
@@ -15,6 +24,7 @@ from .lap_processing import (
 )
 from .persistence import (
     build_session_output_dir,
+    save_corner_analysis,
     save_lap_analysis,
     save_session_bundle,
 )
@@ -63,6 +73,8 @@ def main() -> None:
             "Speed_kmh",
             "Brake",
             "Throttle",
+            "LatAccel",
+            "LongAccel",
             "SteeringWheelAngle_deg",
             "YawRate_deg_s",
         ]
@@ -78,6 +90,14 @@ def main() -> None:
     print("\nUnits for selected columns:")
     for col in preview_cols:
         print(f"  {col}: {units.get(col, 'unknown')}")
+
+    accel_channels = ["LatAccel", "LongAccel"]
+    missing_accel = [col for col in accel_channels if col not in df.columns]
+    if missing_accel:
+        print(
+            "\nWARNING: Missing acceleration channels in this telemetry file: "
+            + ", ".join(missing_accel)
+        )
 
     required_for_next_stage = ["SessionTime", "Lap", "LapDistPct"]
     missing_required = [col for col in required_for_next_stage if col not in df.columns]
@@ -133,6 +153,65 @@ def main() -> None:
         }
         print("\nNo valid laps found, saving empty alignment output.")
 
+    if aligned_laps is not None and not aligned_laps.empty:
+        lap_times = compute_lap_times(df, valid_lap_ids)
+        reference_lap_id = choose_reference_lap(lap_times)
+        print(f"\nReference lap selected for corner metrics: {reference_lap_id}")
+
+        corner_config = CornerDetectionConfig()
+        corner_definitions = detect_main_corners(
+            aligned_laps_df=aligned_laps,
+            reference_lap_id=reference_lap_id,
+            config=corner_config,
+        )
+        print(f"Detected main corners: {len(corner_definitions)}")
+
+        corner_lap_metrics, corner_ranking, corner_report = compute_corner_metrics(
+            aligned_laps_df=aligned_laps,
+            corner_definitions_df=corner_definitions,
+            lap_times_df=lap_times,
+            reference_lap_id=reference_lap_id,
+        )
+        print("\nTop coaching-priority corners:")
+        top = corner_ranking.head(5)
+        if top.empty:
+            print("  none")
+        else:
+            for _, row in top.iterrows():
+                print(
+                    f"  {row['corner_name']} (rank {int(row['coaching_priority_rank'])}) "
+                    f"time_loss={row['mean_time_loss_s']:.4f}s "
+                    f"variability={row['inconsistency_time_s']:.4f}s "
+                    f"score={row['coaching_relevance_score']:.4f}"
+                )
+    else:
+        corner_definitions = pd.DataFrame(
+            columns=[
+                "corner_id",
+                "corner_name",
+                "corner_start_pct",
+                "brake_start_pct",
+                "brake_end_pct",
+                "rotation_start_pct",
+                "apex_pct",
+                "rotation_end_pct",
+                "traction_start_pct",
+                "corner_end_pct",
+                "reference_apex_speed_kmh",
+                "detection_activity_score",
+            ]
+        )
+        corner_lap_metrics = pd.DataFrame()
+        corner_ranking = pd.DataFrame()
+        corner_report = {
+            "reference_lap_id": None,
+            "corner_count": 0,
+            "laps_in_metrics": 0,
+            "trajectory_line_feasible": False,
+            "trajectory_line_note": "No aligned laps available.",
+            "coaching_score_formula": "",
+        }
+
     session_out_dir = build_session_output_dir(
         base_dir="outputs",
         source_csv=csv_path,
@@ -151,10 +230,19 @@ def main() -> None:
         aligned_laps_df=aligned_laps,
         alignment_report=alignment_report,
     )
+    corner_paths = save_corner_analysis(
+        session_out_dir / "corners",
+        corner_definitions_df=corner_definitions,
+        corner_lap_metrics_df=corner_lap_metrics,
+        corner_ranking_df=corner_ranking,
+        corner_report=corner_report,
+    )
 
     print("\nSaved artifacts:")
     print(f"  session_output_dir: {session_out_dir}")
     for label, output_path in output_paths.items():
         print(f"  {label}: {output_path}")
     for label, output_path in lap_paths.items():
+        print(f"  {label}: {output_path}")
+    for label, output_path in corner_paths.items():
         print(f"  {label}: {output_path}")
