@@ -157,6 +157,7 @@ def save_corner_analysis(
     corner_lap_metrics_df: pd.DataFrame,
     corner_ranking_df: pd.DataFrame,
     corner_report: dict,
+    corner_reference_df: pd.DataFrame | None = None,
 ) -> Dict[str, Path]:
     """
     Persist per-corner definitions, per-lap corner metrics, and coaching ranking outputs.
@@ -167,16 +168,29 @@ def save_corner_analysis(
     corner_definitions_path = output_dir / "corner_definitions.csv"
     corner_lap_metrics_path = output_dir / "corner_lap_metrics.csv"
     corner_ranking_path = output_dir / "corner_ranking.csv"
+    corner_reference_path = output_dir / "corner_reference_profile.csv"
     corner_report_path = output_dir / "corner_report.json"
 
     corner_definitions_df.to_csv(corner_definitions_path, index=False)
     corner_lap_metrics_df.to_csv(corner_lap_metrics_path, index=False)
     corner_ranking_df.to_csv(corner_ranking_path, index=False)
+    if corner_reference_df is None:
+        corner_reference_df = pd.DataFrame(
+            columns=[
+                "corner_id",
+                "reference_corner_lap_id",
+                "ref_corner_time_s",
+                "ref_apex_speed_kmh",
+                "ref_traction_reapply_delay_pct",
+            ]
+        )
+    corner_reference_df.to_csv(corner_reference_path, index=False)
     _write_json(corner_report_path, corner_report)
 
     return {
         "corner_definitions_csv": corner_definitions_path,
         "corner_lap_metrics_csv": corner_lap_metrics_path,
         "corner_ranking_csv": corner_ranking_path,
+        "corner_reference_profile_csv": corner_reference_path,
         "corner_report_json": corner_report_path,
     }

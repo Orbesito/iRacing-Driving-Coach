@@ -40,17 +40,45 @@ py -m pip install -r requirements.txt
 
 ## Run
 
+### Mode 1: Single-Session Analysis (Your Session Only)
+
 ```powershell
-python .\TelemetryAnalyzer.py "C:\path\to\mu_exported_session.csv"
+python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv"
 ```
 
 If `python` is not available:
 
 ```powershell
-py .\TelemetryAnalyzer.py "C:\path\to\mu_exported_session.csv"
+py .\TelemetryAnalyzer.py "C:\path\to\my_session.csv"
 ```
 
-No extra inputs are required for lap processing or saving. The script always:
+In this mode, the tool:
+- detects corners from your session,
+- computes per-corner metrics for every valid lap,
+- builds the reference per corner from the best corner segment across your valid laps,
+- ranks coaching-priority corners by time loss, variability, and relevance score.
+
+### Mode 2: Driver vs Faster Reference Driver
+
+```powershell
+python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --reference-csv "C:\path\to\faster_driver_session.csv"
+```
+
+If `python` is not available:
+
+```powershell
+py .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --reference-csv "C:\path\to\faster_driver_session.csv"
+```
+
+In this mode, the tool:
+- detects corners on the reference session,
+- uses those corner IDs/boundaries as stable canonical corners for both sessions,
+- builds a per-corner benchmark from the reference session best corner segments,
+- compares your session against that benchmark turn by turn.
+
+The comparison mode expects both files to be from the same track configuration.
+
+The script always:
 
 - applies derived channels,
 - detects valid laps deterministically,
@@ -77,7 +105,15 @@ Every run saves artifacts in a session-specific folder:
 - `outputs/<session-id>/corners/corner_definitions.csv`
 - `outputs/<session-id>/corners/corner_lap_metrics.csv`
 - `outputs/<session-id>/corners/corner_ranking.csv`
+- `outputs/<session-id>/corners/corner_reference_profile.csv`
 - `outputs/<session-id>/corners/corner_report.json`
+
+When `--reference-csv` is used, additional driver comparison outputs are saved at:
+- `outputs/<driver-session-id>/corners_vs_reference/corner_definitions.csv`
+- `outputs/<driver-session-id>/corners_vs_reference/corner_lap_metrics.csv`
+- `outputs/<driver-session-id>/corners_vs_reference/corner_ranking.csv`
+- `outputs/<driver-session-id>/corners_vs_reference/corner_reference_profile.csv`
+- `outputs/<driver-session-id>/corners_vs_reference/corner_report.json`
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
 
@@ -107,7 +143,7 @@ Every run saves artifacts in a session-specific folder:
 - Raw pedal channels are used when available (`BrakeRaw`, `ThrottleRaw`) for phase detection and pedal metrics.
 - Additional outputs include traction wheel-speed spread and body-slip proxy from velocity channels when available.
 - Per-corner ranking supports:
-  - time loss vs reference lap
+  - time loss vs deterministic reference profile
   - variability / inconsistency
   - combined coaching relevance score
 

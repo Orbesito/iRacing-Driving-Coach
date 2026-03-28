@@ -3,7 +3,11 @@
 from .derived_channels import add_derived_units
 from .corner_metrics import (
     CornerDetectionConfig,
+    apply_corner_reference,
+    build_best_per_corner_reference,
+    build_corner_report,
     choose_reference_lap,
+    compute_corner_lap_metrics,
     compute_corner_metrics,
     compute_lap_times,
     detect_main_corners,
@@ -27,6 +31,10 @@ __all__ = [
     "add_derived_units",
     "build_session_output_dir",
     "choose_reference_lap",
+    "apply_corner_reference",
+    "build_best_per_corner_reference",
+    "build_corner_report",
+    "compute_corner_lap_metrics",
     "compute_corner_metrics",
     "compute_lap_times",
     "CornerDetectionConfig",

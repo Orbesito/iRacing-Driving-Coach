@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
 from .corner_metrics import (
     CornerDetectionConfig,
+    apply_corner_reference,
+    build_best_per_corner_reference,
+    build_corner_report,
     choose_reference_lap,
-    compute_corner_metrics,
+    compute_corner_lap_metrics,
     compute_lap_times,
     detect_main_corners,
 )
@@ -30,123 +34,104 @@ from .persistence import (
 )
 
 
-def main() -> None:
-    """CLI entrypoint for loading and inspecting a Mu telemetry session."""
-    parser = argparse.ArgumentParser(
-        description="Load and validate a Mu-exported iRacing CSV session file."
+@dataclass
+class SessionAnalysis:
+    csv_path: Path
+    metadata: dict[str, str]
+    units: dict[str, str]
+    telemetry_df: pd.DataFrame
+    parse_report: dict[str, int]
+    lap_summary: pd.DataFrame
+    valid_lap_ids: list[int]
+    aligned_laps: pd.DataFrame
+    alignment_report: dict[str, object]
+    lap_times: pd.DataFrame
+    output_dir: Path
+
+
+def _progress(message: str) -> None:
+    print(f"\n... {message}", flush=True)
+
+
+def _empty_corner_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    corner_definitions = pd.DataFrame(
+        columns=[
+            "corner_id",
+            "corner_name",
+            "corner_start_pct",
+            "brake_start_pct",
+            "brake_end_pct",
+            "rotation_start_pct",
+            "apex_pct",
+            "rotation_end_pct",
+            "traction_start_pct",
+            "corner_end_pct",
+            "reference_apex_speed_kmh",
+            "detection_activity_score",
+        ]
     )
-    parser.add_argument(
-        "csv_file",
-        type=str,
-        help="Path to the Mu-exported CSV file",
-    )
-    args = parser.parse_args()
+    corner_metrics = pd.DataFrame()
+    corner_ranking = pd.DataFrame()
+    corner_report = {
+        "corner_count": 0,
+        "laps_in_metrics": 0,
+        "trajectory_line_feasible": False,
+        "trajectory_line_note": "No aligned laps available.",
+        "coaching_score_formula": "",
+    }
+    return corner_definitions, corner_metrics, corner_ranking, corner_report
 
-    csv_path = Path(args.csv_file)
-    if not csv_path.exists():
-        raise FileNotFoundError(f"File not found: {csv_path}")
 
-    print(f"\nPython interpreter: {sys.executable}")
-    print(f"Loading Mu CSV: {csv_path}")
-    metadata, units, df, parse_report = load_mu_csv(csv_path)
-
+def _print_parse_report(parse_report: dict[str, int]) -> None:
     print("\nParse summary:")
     for key, value in parse_report.items():
         print(f"  {key}: {value}")
 
-    print("\nApplying derived channel conversions...")
-    df, derived_units = add_derived_units(df)
-    units.update(derived_units)
 
-    print("\nSession metadata:")
-    for key, value in metadata.items():
-        print(f"  {key}: {value}")
-
-    print(f"\nLoaded dataframe shape: {df.shape}")
-    preview_cols = [
-        col
-        for col in [
-            "SessionTime",
-            "Lap",
-            "LapDistPct",
-            "Speed",
-            "Speed_kmh",
-            "Brake",
-            "BrakeRaw",
-            "Throttle",
-            "ThrottleRaw",
-            "LatAccel",
-            "LongAccel",
-            "VertAccel",
-            "SteeringWheelAngle_deg",
-            "YawRate_deg_s",
-        ]
-        if col in df.columns
-    ]
-
-    if preview_cols:
-        print("\nSelected columns preview (first 5 rows):")
-        print(df[preview_cols].head(5))
-    else:
-        print("\nNo preview columns found in this session.")
-
-    print("\nUnits for selected columns:")
-    for col in preview_cols:
-        print(f"  {col}: {units.get(col, 'unknown')}")
-
-    accel_channels = ["LatAccel", "LongAccel"]
-    missing_accel = [col for col in accel_channels if col not in df.columns]
-    if missing_accel:
-        print(
-            "\nWARNING: Missing acceleration channels in this telemetry file: "
-            + ", ".join(missing_accel)
-        )
-
+def _validate_required_channels(df: pd.DataFrame) -> None:
     required_for_next_stage = ["SessionTime", "Lap", "LapDistPct"]
     missing_required = [col for col in required_for_next_stage if col not in df.columns]
-
     if missing_required:
         raise ValueError(
             "Missing required channels for deterministic lap alignment: "
             + ", ".join(missing_required)
         )
 
+
+def _analyze_single_session(csv_path: Path, label: str) -> SessionAnalysis:
+    print(f"\n[{label}] Loading Mu CSV: {csv_path}")
+    _progress(f"[{label}] Parsing Mu CSV metadata and telemetry")
+    metadata, units, df, parse_report = load_mu_csv(csv_path)
+    _print_parse_report(parse_report)
+
+    _progress(f"[{label}] Applying derived channels")
+    df, derived_units = add_derived_units(df)
+    units.update(derived_units)
+    _validate_required_channels(df)
+
+    _progress(f"[{label}] Classifying valid laps")
     validity_config = LapValidityConfig()
     lap_summary = build_lap_summary(df, config=validity_config)
     valid_lap_ids = get_valid_lap_ids(lap_summary)
 
-    print("\nLap validity summary:")
+    print(f"\n[{label}] Lap validity summary:")
     print(
         f"  total_laps_detected: {len(lap_summary)}\n"
         f"  valid_laps: {len(valid_lap_ids)}\n"
         f"  valid_lap_ids: {valid_lap_ids}"
     )
 
-    invalid_laps = lap_summary.loc[
-        ~lap_summary["is_valid"], ["lap_id", "invalid_reasons"]
-    ]
-    if not invalid_laps.empty:
-        print("\nInvalid lap reasons:")
-        for _, row in invalid_laps.iterrows():
-            print(f"  lap {int(row['lap_id'])}: {row['invalid_reasons']}")
-
     if valid_lap_ids:
+        _progress(f"[{label}] Aligning valid laps by distance")
         aligned_laps, alignment_report = align_laps_by_distance(
             df,
             lap_ids=valid_lap_ids,
             distance_step_pct=DEFAULT_DISTANCE_STEP_PCT,
         )
-        print("\nDistance alignment summary:")
-        print(f"  requested_lap_count: {alignment_report['requested_lap_count']}")
-        print(f"  aligned_lap_count: {alignment_report['aligned_lap_count']}")
-        print(f"  distance_step_pct: {alignment_report['distance_step_pct']}")
-        print(f"  distance_grid_points: {alignment_report['distance_grid_points']}")
-        print(
-            "  alignment_channels: "
-            + ", ".join(alignment_report["alignment_channels"])
-        )
+        _progress(f"[{label}] Computing lap times for aligned laps")
+        lap_times = compute_lap_times(df, valid_lap_ids)
     else:
-        aligned_laps = None
+        aligned_laps = pd.DataFrame(columns=["lap_id", "distance_pct"])
         alignment_report = {
             "requested_lap_count": 0,
             "aligned_lap_count": 0,
@@ -154,98 +139,301 @@ def main() -> None:
             "distance_grid_points": 0,
             "alignment_channels": [],
         }
-        print("\nNo valid laps found, saving empty alignment output.")
+        lap_times = pd.DataFrame(columns=["lap_id", "start_time_s", "end_time_s", "lap_time_s"])
 
-    if aligned_laps is not None and not aligned_laps.empty:
-        lap_times = compute_lap_times(df, valid_lap_ids)
-        reference_lap_id = choose_reference_lap(lap_times)
-        print(f"\nReference lap selected for corner metrics: {reference_lap_id}")
+    print(f"\n[{label}] Distance alignment summary:")
+    print(f"  requested_lap_count: {alignment_report['requested_lap_count']}")
+    print(f"  aligned_lap_count: {alignment_report['aligned_lap_count']}")
+    print(f"  distance_step_pct: {alignment_report['distance_step_pct']}")
+    print(f"  distance_grid_points: {alignment_report['distance_grid_points']}")
 
-        corner_config = CornerDetectionConfig()
-        corner_definitions = detect_main_corners(
-            aligned_laps_df=aligned_laps,
-            reference_lap_id=reference_lap_id,
-            config=corner_config,
-        )
-        print(f"Detected main corners: {len(corner_definitions)}")
-
-        corner_lap_metrics, corner_ranking, corner_report = compute_corner_metrics(
-            aligned_laps_df=aligned_laps,
-            corner_definitions_df=corner_definitions,
-            lap_times_df=lap_times,
-            reference_lap_id=reference_lap_id,
-        )
-        print("\nTop coaching-priority corners:")
-        top = corner_ranking.head(5)
-        if top.empty:
-            print("  none")
-        else:
-            for _, row in top.iterrows():
-                print(
-                    f"  {row['corner_name']} (rank {int(row['coaching_priority_rank'])}) "
-                    f"time_loss={row['mean_time_loss_s']:.4f}s "
-                    f"variability={row['inconsistency_time_s']:.4f}s "
-                    f"score={row['coaching_relevance_score']:.4f}"
-                )
-    else:
-        corner_definitions = pd.DataFrame(
-            columns=[
-                "corner_id",
-                "corner_name",
-                "corner_start_pct",
-                "brake_start_pct",
-                "brake_end_pct",
-                "rotation_start_pct",
-                "apex_pct",
-                "rotation_end_pct",
-                "traction_start_pct",
-                "corner_end_pct",
-                "reference_apex_speed_kmh",
-                "detection_activity_score",
-            ]
-        )
-        corner_lap_metrics = pd.DataFrame()
-        corner_ranking = pd.DataFrame()
-        corner_report = {
-            "reference_lap_id": None,
-            "corner_count": 0,
-            "laps_in_metrics": 0,
-            "trajectory_line_feasible": False,
-            "trajectory_line_note": "No aligned laps available.",
-            "coaching_score_formula": "",
-        }
-
-    session_out_dir = build_session_output_dir(
+    out_dir = build_session_output_dir(
         base_dir="outputs",
         source_csv=csv_path,
         metadata=metadata,
     )
+    _progress(f"[{label}] Saving session and lap artifacts")
     output_paths = save_session_bundle(
-        session_out_dir,
+        out_dir,
         telemetry_df=df,
         metadata=metadata,
         units_map=units,
         parse_report=parse_report,
     )
     lap_paths = save_lap_analysis(
-        session_out_dir / "laps",
+        out_dir / "laps",
         lap_summary_df=lap_summary,
         aligned_laps_df=aligned_laps,
         alignment_report=alignment_report,
     )
-    corner_paths = save_corner_analysis(
-        session_out_dir / "corners",
-        corner_definitions_df=corner_definitions,
-        corner_lap_metrics_df=corner_lap_metrics,
-        corner_ranking_df=corner_ranking,
-        corner_report=corner_report,
+
+    print(f"\n[{label}] Saved core artifacts:")
+    print(f"  session_output_dir: {out_dir}")
+    for key, value in output_paths.items():
+        print(f"  {key}: {value}")
+    for key, value in lap_paths.items():
+        print(f"  {key}: {value}")
+
+    return SessionAnalysis(
+        csv_path=csv_path,
+        metadata=metadata,
+        units=units,
+        telemetry_df=df,
+        parse_report=parse_report,
+        lap_summary=lap_summary,
+        valid_lap_ids=valid_lap_ids,
+        aligned_laps=aligned_laps,
+        alignment_report=alignment_report,
+        lap_times=lap_times,
+        output_dir=out_dir,
     )
 
-    print("\nSaved artifacts:")
-    print(f"  session_output_dir: {session_out_dir}")
-    for label, output_path in output_paths.items():
-        print(f"  {label}: {output_path}")
-    for label, output_path in lap_paths.items():
-        print(f"  {label}: {output_path}")
-    for label, output_path in corner_paths.items():
-        print(f"  {label}: {output_path}")
+
+def _normalise_text(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
+def _assert_same_track(driver_metadata: dict[str, str], reference_metadata: dict[str, str]) -> None:
+    driver_venue = _normalise_text(driver_metadata.get("Venue", ""))
+    reference_venue = _normalise_text(reference_metadata.get("Venue", ""))
+    if driver_venue and reference_venue and driver_venue != reference_venue:
+        raise ValueError(
+            "Driver and reference sessions appear to be from different venues: "
+            f"'{driver_metadata.get('Venue', '')}' vs '{reference_metadata.get('Venue', '')}'. "
+            "For deterministic cross-session corner comparison, both inputs must be from the same track configuration."
+        )
+
+
+def _run_single_session_mode(session: SessionAnalysis) -> None:
+    print("\nRunning mode: single-session coaching analysis.")
+    if session.aligned_laps.empty or session.lap_times.empty:
+        corner_definitions, corner_metrics, corner_ranking, corner_report = _empty_corner_outputs()
+        corner_reference = pd.DataFrame()
+    else:
+        detection_lap_id = choose_reference_lap(session.lap_times)
+        print(f"Corner detection lap (fastest valid lap): {detection_lap_id}")
+        _progress("Detecting main corners and phase boundaries")
+        corner_definitions = detect_main_corners(
+            aligned_laps_df=session.aligned_laps,
+            reference_lap_id=detection_lap_id,
+            config=CornerDetectionConfig(),
+        )
+
+        _progress("Computing per-corner metrics for all valid laps")
+        raw_corner_metrics = compute_corner_lap_metrics(
+            aligned_laps_df=session.aligned_laps,
+            corner_definitions_df=corner_definitions,
+            lap_times_df=session.lap_times,
+        )
+        _progress("Building best-per-corner reference profile")
+        corner_reference = build_best_per_corner_reference(raw_corner_metrics)
+        _progress("Scoring corners against best-per-corner reference")
+        corner_metrics, corner_ranking = apply_corner_reference(
+            corner_lap_metrics_df=raw_corner_metrics,
+            corner_reference_df=corner_reference,
+            comparison_label="self_best_per_corner",
+            exclude_reference_rows=True,
+        )
+        corner_report = build_corner_report(
+            aligned_laps_df=session.aligned_laps,
+            corner_definitions_df=corner_definitions,
+            corner_lap_metrics_df=corner_metrics,
+            reference_mode="best_per_corner_same_session",
+            reference_source=str(session.csv_path),
+        )
+        corner_report["operation_mode"] = "single_session"
+        corner_report["corner_detection_lap_id"] = int(detection_lap_id)
+        corner_report["reference_note"] = (
+            "Per-corner benchmark uses the best corner performance found across all valid laps, "
+            "not only the globally fastest lap."
+        )
+
+    _progress("Saving corner coaching artifacts")
+    corner_paths = save_corner_analysis(
+        session.output_dir / "corners",
+        corner_definitions_df=corner_definitions,
+        corner_lap_metrics_df=corner_metrics,
+        corner_ranking_df=corner_ranking,
+        corner_report=corner_report,
+        corner_reference_df=corner_reference,
+    )
+
+    print("\nSaved corner artifacts:")
+    for key, value in corner_paths.items():
+        print(f"  {key}: {value}")
+
+    print("\nTop coaching-priority corners:")
+    top = corner_ranking.head(5)
+    if top.empty:
+        print("  none")
+        return
+    for _, row in top.iterrows():
+        print(
+            f"  {row['corner_name']} (rank {int(row['coaching_priority_rank'])}) "
+            f"time_loss={row['mean_time_loss_s']:.4f}s "
+            f"variability={row['inconsistency_time_s']:.4f}s "
+            f"score={row['coaching_relevance_score']:.4f}"
+        )
+
+
+def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: SessionAnalysis) -> None:
+    print("\nRunning mode: driver session vs faster reference session.")
+    _assert_same_track(driver_session.metadata, reference_session.metadata)
+
+    if (
+        driver_session.aligned_laps.empty
+        or driver_session.lap_times.empty
+        or reference_session.aligned_laps.empty
+        or reference_session.lap_times.empty
+    ):
+        driver_corner_definitions, driver_corner_metrics, driver_corner_ranking, driver_corner_report = (
+            _empty_corner_outputs()
+        )
+        reference_corner_profile = pd.DataFrame()
+    else:
+        reference_detection_lap_id = choose_reference_lap(reference_session.lap_times)
+        print(f"Reference corner detection lap: {reference_detection_lap_id}")
+
+        # Stable corner IDs: corner definitions are detected once on reference session
+        # and then reused for both sessions.
+        _progress("Detecting canonical corners from reference session")
+        canonical_corner_definitions = detect_main_corners(
+            aligned_laps_df=reference_session.aligned_laps,
+            reference_lap_id=reference_detection_lap_id,
+            config=CornerDetectionConfig(),
+        )
+
+        _progress("Computing reference-session per-corner metrics")
+        reference_raw_metrics = compute_corner_lap_metrics(
+            aligned_laps_df=reference_session.aligned_laps,
+            corner_definitions_df=canonical_corner_definitions,
+            lap_times_df=reference_session.lap_times,
+        )
+        _progress("Building reference best-per-corner profile")
+        reference_corner_profile = build_best_per_corner_reference(reference_raw_metrics)
+
+        _progress("Scoring reference session against its own profile")
+        reference_metrics_scored, reference_ranking = apply_corner_reference(
+            corner_lap_metrics_df=reference_raw_metrics,
+            corner_reference_df=reference_corner_profile,
+            comparison_label="reference_self_best_per_corner",
+            exclude_reference_rows=True,
+        )
+        reference_report = build_corner_report(
+            aligned_laps_df=reference_session.aligned_laps,
+            corner_definitions_df=canonical_corner_definitions,
+            corner_lap_metrics_df=reference_metrics_scored,
+            reference_mode="best_per_corner_same_session",
+            reference_source=str(reference_session.csv_path),
+        )
+        reference_report["operation_mode"] = "reference_baseline"
+        reference_report["corner_detection_lap_id"] = int(reference_detection_lap_id)
+
+        _progress("Saving reference-session corner artifacts")
+        save_corner_analysis(
+            reference_session.output_dir / "corners",
+            corner_definitions_df=canonical_corner_definitions,
+            corner_lap_metrics_df=reference_metrics_scored,
+            corner_ranking_df=reference_ranking,
+            corner_report=reference_report,
+            corner_reference_df=reference_corner_profile,
+        )
+
+        _progress("Computing driver-session per-corner metrics on canonical corners")
+        driver_raw_metrics = compute_corner_lap_metrics(
+            aligned_laps_df=driver_session.aligned_laps,
+            corner_definitions_df=canonical_corner_definitions,
+            lap_times_df=driver_session.lap_times,
+        )
+        _progress("Scoring driver session vs external reference profile")
+        driver_corner_metrics, driver_corner_ranking = apply_corner_reference(
+            corner_lap_metrics_df=driver_raw_metrics,
+            corner_reference_df=reference_corner_profile,
+            comparison_label="vs_external_reference_driver",
+            exclude_reference_rows=False,
+        )
+        driver_corner_definitions = canonical_corner_definitions
+        driver_corner_report = build_corner_report(
+            aligned_laps_df=driver_session.aligned_laps,
+            corner_definitions_df=driver_corner_definitions,
+            corner_lap_metrics_df=driver_corner_metrics,
+            reference_mode="external_session_best_per_corner",
+            reference_source=str(reference_session.csv_path),
+        )
+        driver_corner_report["operation_mode"] = "vs_reference_session"
+        driver_corner_report["corner_detection_lap_id_reference"] = int(reference_detection_lap_id)
+        driver_corner_report["stable_corner_id_note"] = (
+            "Corner IDs and boundaries are defined from the reference session and reused "
+            "without re-detection on the driver session."
+        )
+        driver_corner_report["driver_csv"] = str(driver_session.csv_path)
+        driver_corner_report["reference_csv"] = str(reference_session.csv_path)
+
+    _progress("Saving driver-vs-reference corner artifacts")
+    driver_corner_paths = save_corner_analysis(
+        driver_session.output_dir / "corners_vs_reference",
+        corner_definitions_df=driver_corner_definitions,
+        corner_lap_metrics_df=driver_corner_metrics,
+        corner_ranking_df=driver_corner_ranking,
+        corner_report=driver_corner_report,
+        corner_reference_df=reference_corner_profile,
+    )
+
+    print("\nSaved driver-vs-reference corner artifacts:")
+    for key, value in driver_corner_paths.items():
+        print(f"  {key}: {value}")
+
+    print("\nTop coaching-priority corners vs reference:")
+    top = driver_corner_ranking.head(5)
+    if top.empty:
+        print("  none")
+        return
+    for _, row in top.iterrows():
+        print(
+            f"  {row['corner_name']} (rank {int(row['coaching_priority_rank'])}) "
+            f"time_loss={row['mean_time_loss_s']:.4f}s "
+            f"variability={row['inconsistency_time_s']:.4f}s "
+            f"score={row['coaching_relevance_score']:.4f}"
+        )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Deterministic Mu telemetry analysis for single-session coaching or driver-vs-reference comparison."
+    )
+    parser.add_argument(
+        "csv_file",
+        type=str,
+        help="Path to the driver's (or self) Mu-exported CSV file.",
+    )
+    parser.add_argument(
+        "--reference-csv",
+        type=str,
+        default=None,
+        help="Optional faster-reference Mu CSV file. If provided, driver-vs-reference mode is used.",
+    )
+    args = parser.parse_args()
+
+    driver_csv_path = Path(args.csv_file)
+    if not driver_csv_path.exists():
+        raise FileNotFoundError(f"File not found: {driver_csv_path}")
+
+    reference_csv_path = Path(args.reference_csv) if args.reference_csv else None
+    if reference_csv_path is not None and not reference_csv_path.exists():
+        raise FileNotFoundError(f"Reference file not found: {reference_csv_path}")
+
+    print(f"\nPython interpreter: {sys.executable}")
+    driver_session = _analyze_single_session(driver_csv_path, label="Driver/Self Session")
+
+    if reference_csv_path is None:
+        _run_single_session_mode(driver_session)
+        return
+
+    reference_session = _analyze_single_session(
+        reference_csv_path, label="Reference Session"
+    )
+    _run_vs_reference_mode(driver_session, reference_session)
+
+
+if __name__ == "__main__":
+    main()

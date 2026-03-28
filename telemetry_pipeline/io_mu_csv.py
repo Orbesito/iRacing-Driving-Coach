@@ -101,7 +101,7 @@ def load_mu_csv(path: str | Path) -> tuple[MetadataMap, UnitsMap, pd.DataFrame, 
     """
     path = Path(path)
     metadata, header, units, data_start_row = _parse_mu_preamble(path)
-
+    print("\n... Reading telemetry samples from CSV", flush=True)
     df = pd.read_csv(
         path,
         skiprows=data_start_row,
@@ -111,12 +111,13 @@ def load_mu_csv(path: str | Path) -> tuple[MetadataMap, UnitsMap, pd.DataFrame, 
         low_memory=False,
         on_bad_lines="error",
     )
-
+    print("\n... Converting telemetry values to numeric", flush=True)
     # Coerce telemetry values to numeric while preserving deterministic NaN behavior.
     df = df.apply(pd.to_numeric, errors="coerce")
     raw_rows_loaded = len(df)
     df = df.dropna(how="all").reset_index(drop=True)
     blank_rows_dropped = raw_rows_loaded - len(df)
+    print("\n... Building units and parse report", flush=True)
 
     units_map = dict(zip(header, units))
     parse_report: ParseReport = {
@@ -125,5 +126,5 @@ def load_mu_csv(path: str | Path) -> tuple[MetadataMap, UnitsMap, pd.DataFrame, 
         "blank_rows_dropped": int(blank_rows_dropped),
         "final_rows": int(len(df)),
     }
-
+    print("\n... CSV load complete", flush=True)
     return metadata, units_map, df, parse_report
