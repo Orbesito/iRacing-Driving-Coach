@@ -26,12 +26,24 @@ class CornerDetectionConfig:
     throttle_reapply_consecutive_points: int = 3
 
 
+BRAKE_CHANNEL_PRIORITY = ["BrakeRaw", "Brake"]
+THROTTLE_CHANNEL_PRIORITY = ["ThrottleRaw", "Throttle"]
+WHEEL_SPEED_CHANNELS = ["LFspeed", "RFspeed", "LRspeed", "RRspeed"]
+
+
 def _lap_id_series(df: pd.DataFrame, lap_col: str = "Lap") -> pd.Series:
     lap_numeric = pd.to_numeric(df[lap_col], errors="coerce")
     lap_rounded = lap_numeric.round()
     is_integer_like = (lap_numeric - lap_rounded).abs() <= 1e-6
     lap_clean = lap_rounded.where(is_integer_like, np.nan)
     return lap_clean.astype("Int64")
+
+
+def _first_available_column(df: pd.DataFrame, candidates: List[str]) -> str | None:
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
 
 
 def compute_lap_times(
@@ -178,8 +190,9 @@ def _find_phase_boundaries(
 
     brake_start_pct = corner_start_pct
     brake_end_pct = apex_pct
-    if "Brake" in pre_apex.columns and not pre_apex.empty:
-        brake = pd.to_numeric(pre_apex["Brake"], errors="coerce").fillna(0.0)
+    brake_col = _first_available_column(pre_apex, BRAKE_CHANNEL_PRIORITY)
+    if brake_col is not None and not pre_apex.empty:
+        brake = pd.to_numeric(pre_apex[brake_col], errors="coerce").fillna(0.0)
         braking_mask = brake >= config.brake_threshold_pct
         if braking_mask.any():
             braking_rows = pre_apex.loc[braking_mask]
@@ -188,9 +201,10 @@ def _find_phase_boundaries(
 
     brake_end_pct = min(brake_end_pct, apex_pct)
     rotation_start_pct = brake_end_pct
+    throttle_col = _first_available_column(post_apex, THROTTLE_CHANNEL_PRIORITY)
     traction_start_pct = _find_traction_start_distance(
         post_apex=post_apex,
-        throttle_col="Throttle",
+        throttle_col=throttle_col if throttle_col is not None else "Throttle",
         threshold_pct=config.throttle_reapply_threshold_pct,
         consecutive_points=config.throttle_reapply_consecutive_points,
         fallback_distance=apex_pct,
@@ -462,6 +476,13 @@ def _safe_mean(series: pd.Series) -> float:
     return float(series.mean())
 
 
+def _safe_mean_abs(series: pd.Series) -> float:
+    series = pd.to_numeric(series, errors="coerce").abs()
+    if series.dropna().empty:
+        return np.nan
+    return float(series.mean())
+
+
 def _safe_max(series: pd.Series) -> float:
     series = pd.to_numeric(series, errors="coerce")
     if series.dropna().empty:
@@ -482,6 +503,29 @@ def _normalise_positive(series: pd.Series) -> pd.Series:
     if max_value <= 0.0:
         return pd.Series(np.zeros(len(clipped)), index=clipped.index)
     return clipped / max_value
+
+
+def _wheel_speed_std_mean(segment_df: pd.DataFrame) -> float:
+    wheel_cols = [col for col in WHEEL_SPEED_CHANNELS if col in segment_df.columns]
+    if len(wheel_cols) < 2:
+        return np.nan
+    wheel_df = segment_df[wheel_cols].apply(pd.to_numeric, errors="coerce")
+    row_std = wheel_df.std(axis=1, skipna=True)
+    if row_std.dropna().empty:
+        return np.nan
+    return float(row_std.mean())
+
+
+def _body_slip_ratio_mean(segment_df: pd.DataFrame) -> float:
+    if "VelocityX" not in segment_df.columns or "VelocityY" not in segment_df.columns:
+        return np.nan
+    vx = pd.to_numeric(segment_df["VelocityX"], errors="coerce").abs()
+    vy = pd.to_numeric(segment_df["VelocityY"], errors="coerce").abs()
+    denom = vx + 1e-3
+    slip = vy / denom
+    if slip.dropna().empty:
+        return np.nan
+    return float(slip.mean())
 
 
 def compute_corner_metrics(
@@ -562,6 +606,12 @@ def compute_corner_metrics(
                     "brake_mean_pct": _safe_mean(brake_seg["Brake"])
                     if "Brake" in brake_seg.columns
                     else np.nan,
+                    "brake_raw_peak_pct": _safe_max(brake_seg["BrakeRaw"])
+                    if "BrakeRaw" in brake_seg.columns
+                    else np.nan,
+                    "brake_raw_mean_pct": _safe_mean(brake_seg["BrakeRaw"])
+                    if "BrakeRaw" in brake_seg.columns
+                    else np.nan,
                     "apex_speed_kmh": (
                         float(apex_row["Speed_kmh"])
                         if apex_row is not None and "Speed_kmh" in apex_row.index
@@ -590,22 +640,34 @@ def compute_corner_metrics(
                         )
                     ),
                     "rotation_mean_abs_lat_accel_g": (
-                        _safe_mean(rotation_seg["LatAccel"].abs())
+                        _safe_mean_abs(rotation_seg["LatAccel"])
                         if "LatAccel" in rotation_seg.columns
                         else np.nan
                     ),
+                    "rotation_mean_body_slip_ratio": _body_slip_ratio_mean(rotation_seg),
                     "braking_mean_long_accel_g": (
                         _safe_mean(brake_seg["LongAccel"])
                         if "LongAccel" in brake_seg.columns
+                        else np.nan
+                    ),
+                    "corner_mean_abs_vert_accel_g": (
+                        _safe_mean_abs(corner_seg["VertAccel"])
+                        if "VertAccel" in corner_seg.columns
                         else np.nan
                     ),
                     "traction_reapply_delay_pct": traction_start - apex_pct,
                     "traction_exit_throttle_mean_pct": _safe_mean(traction_seg["Throttle"])
                     if "Throttle" in traction_seg.columns
                     else np.nan,
+                    "traction_exit_throttle_raw_mean_pct": _safe_mean(
+                        traction_seg["ThrottleRaw"]
+                    )
+                    if "ThrottleRaw" in traction_seg.columns
+                    else np.nan,
                     "traction_exit_long_accel_mean": _safe_mean(traction_seg["LongAccel"])
                     if "LongAccel" in traction_seg.columns
                     else np.nan,
+                    "traction_wheel_speed_std_mps": _wheel_speed_std_mean(traction_seg),
                 }
             )
 
@@ -704,6 +766,21 @@ def compute_corner_metrics(
             "0.30*normalized(inconsistency_time_s) + "
             "0.10*normalized(mean_apex_speed_loss_kmh)"
         ),
+        "channel_availability": {
+            "BrakeRaw": "BrakeRaw" in aligned_laps_df.columns,
+            "ThrottleRaw": "ThrottleRaw" in aligned_laps_df.columns,
+            "LatAccel": "LatAccel" in aligned_laps_df.columns,
+            "LongAccel": "LongAccel" in aligned_laps_df.columns,
+            "VertAccel": "VertAccel" in aligned_laps_df.columns,
+            "VelocityX": "VelocityX" in aligned_laps_df.columns,
+            "VelocityY": "VelocityY" in aligned_laps_df.columns,
+            "LFspeed": "LFspeed" in aligned_laps_df.columns,
+            "RFspeed": "RFspeed" in aligned_laps_df.columns,
+            "LRspeed": "LRspeed" in aligned_laps_df.columns,
+            "RRspeed": "RRspeed" in aligned_laps_df.columns,
+            "Lat": "Lat" in aligned_laps_df.columns,
+            "Lon": "Lon" in aligned_laps_df.columns,
+        },
     }
 
     return corner_lap_metrics, corner_ranking, report

@@ -72,9 +72,12 @@ def main() -> None:
             "Speed",
             "Speed_kmh",
             "Brake",
+            "BrakeRaw",
             "Throttle",
+            "ThrottleRaw",
             "LatAccel",
             "LongAccel",
+            "VertAccel",
             "SteeringWheelAngle_deg",
             "YawRate_deg_s",
         ]

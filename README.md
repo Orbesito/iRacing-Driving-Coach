@@ -57,6 +57,7 @@ No extra inputs are required for lap processing or saving. The script always:
 - ignores out/warm-up and short/partial laps,
 - aligns valid laps by distance (`LapDistPct`),
 - includes acceleration channels (`LatAccel`, `LongAccel`) in analysis,
+- includes additional high-value dynamics channels in aligned outputs (`BrakeRaw`, `ThrottleRaw`, wheel speeds, velocity components, `VertAccel`, `Lat`, `Lon`),
 - detects main corners from a deterministic multi-signal profile (speed, yaw, lateral accel, steering),
 - segments each corner into braking, rotation, and traction phases,
 - computes per-corner coaching metrics and ranking,
@@ -103,6 +104,8 @@ Every run saves artifacts in a session-specific folder:
   - braking phase (`brake_start_pct` to `brake_end_pct`)
   - rotation phase (`rotation_start_pct` to `rotation_end_pct`, around apex)
   - traction phase (`traction_start_pct` to `corner_end_pct`)
+- Raw pedal channels are used when available (`BrakeRaw`, `ThrottleRaw`) for phase detection and pedal metrics.
+- Additional outputs include traction wheel-speed spread and body-slip proxy from velocity channels when available.
 - Per-corner ranking supports:
   - time loss vs reference lap
   - variability / inconsistency
