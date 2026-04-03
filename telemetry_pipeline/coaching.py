@@ -54,8 +54,15 @@ def _normalised_positive(value: float, threshold: float) -> float:
 
 
 def _build_corner_snapshot(corner_rows: pd.DataFrame, ranking_row: pd.Series) -> Dict[str, float]:
+    brake_peak_series = None
+    if "brake_raw_peak_pct" in corner_rows.columns:
+        brake_peak_series = pd.to_numeric(corner_rows["brake_raw_peak_pct"], errors="coerce")
+    elif "brake_peak_pct" in corner_rows.columns:
+        brake_peak_series = pd.to_numeric(corner_rows["brake_peak_pct"], errors="coerce")
+
     brake_peak = _first_finite(
         [
+            float(brake_peak_series.median()) if brake_peak_series is not None else np.nan,
             _safe_mean(corner_rows["brake_raw_peak_pct"])
             if "brake_raw_peak_pct" in corner_rows.columns
             else np.nan,
@@ -127,17 +134,39 @@ def _build_corner_snapshot(corner_rows: pd.DataFrame, ranking_row: pd.Series) ->
         "apex_position_delta_m": _safe_mean(corner_rows["apex_position_delta_m"])
         if "apex_position_delta_m" in corner_rows.columns
         else np.nan,
+        "brake_event_fraction": float((brake_peak_series.fillna(0.0) >= 5.0).mean())
+        if brake_peak_series is not None and not brake_peak_series.empty
+        else np.nan,
+        "ref_brake_peak_pct": ref_brake_peak,
     }
 
 
 def _phase_scores(snapshot: Dict[str, float], config: CoachingConfig) -> Dict[str, float]:
+    no_brake_corner = (
+        np.isfinite(snapshot.get("brake_event_fraction", np.nan))
+        and snapshot.get("brake_event_fraction", 1.0) < 0.30
+        and (
+            not np.isfinite(snapshot.get("ref_brake_peak_pct", np.nan))
+            or snapshot.get("ref_brake_peak_pct", 100.0) < config.significant_brake_delta_pct
+        )
+    )
+
     entry = (
-        _normalised_positive(snapshot["braking_time_delta_s"], config.significant_phase_delta_s)
-        + _normalised_positive(snapshot["brake_peak_delta_pct"], config.significant_brake_delta_pct)
+        _normalised_positive(
+            snapshot["braking_time_delta_s"], config.significant_phase_delta_s
+        )
+        + _normalised_positive(
+            snapshot["brake_peak_delta_pct"], config.significant_brake_delta_pct
+        )
         + _normalised_positive(
             snapshot["apex_speed_loss_kmh"], config.significant_apex_speed_loss_kmh
         )
     )
+    if no_brake_corner:
+        entry = 0.30 * _normalised_positive(
+            snapshot["apex_speed_loss_kmh"], config.significant_apex_speed_loss_kmh
+        )
+
     mid = (
         _normalised_positive(snapshot["rotation_time_delta_s"], config.significant_phase_delta_s)
         + _normalised_positive(
@@ -162,6 +191,22 @@ def _phase_scores(snapshot: Dict[str, float], config: CoachingConfig) -> Dict[st
 
 
 def _entry_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[str, str, str, str]:
+    no_brake_corner = (
+        np.isfinite(snapshot.get("brake_event_fraction", np.nan))
+        and snapshot.get("brake_event_fraction", 1.0) < 0.30
+        and (
+            not np.isfinite(snapshot.get("ref_brake_peak_pct", np.nan))
+            or snapshot.get("ref_brake_peak_pct", 100.0) < config.significant_brake_delta_pct
+        )
+    )
+    if no_brake_corner:
+        return (
+            "This corner is effectively a no-brake/lift-and-steer section.",
+            "Time is likely lost from line and steering management rather than brake usage.",
+            "Prioritize entry positioning and reduce steering corrections so minimum speed is carried cleanly.",
+            "Drill: 3 laps with cue 'place car early, one steering arc, no extra correction'.",
+        )
+
     if (
         snapshot["braking_time_delta_s"] > config.significant_phase_delta_s
         and snapshot["brake_peak_delta_pct"] > config.significant_brake_delta_pct
@@ -269,6 +314,19 @@ def _exit_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[st
 def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Dict[str, object]:
     phase_scores = _phase_scores(snapshot, config)
     primary_phase = max(phase_scores, key=phase_scores.get)
+    no_brake_corner = (
+        np.isfinite(snapshot.get("brake_event_fraction", np.nan))
+        and snapshot.get("brake_event_fraction", 1.0) < 0.30
+        and (
+            not np.isfinite(snapshot.get("ref_brake_peak_pct", np.nan))
+            or snapshot.get("ref_brake_peak_pct", 100.0) < config.significant_brake_delta_pct
+        )
+    )
+    if no_brake_corner and primary_phase == "entry":
+        if phase_scores["mid"] >= phase_scores["exit"]:
+            primary_phase = "mid"
+        else:
+            primary_phase = "exit"
 
     if primary_phase == "entry":
         symptom, cause, action, drill = _entry_advice(snapshot, config)
@@ -292,6 +350,7 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
         ("exit_long_accel_delta", "exit_long_accel_delta_vs_ref", "g"),
         ("wheel_speed_std_delta", "wheel_speed_std_delta_vs_ref", "m/s"),
         ("apex_position_delta_m", "apex_position_delta_vs_ref", "m"),
+        ("brake_event_fraction", "brake_event_fraction", "ratio"),
     ]
     for key, label, unit in metric_order:
         value = snapshot.get(key, np.nan)

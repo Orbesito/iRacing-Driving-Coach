@@ -309,17 +309,27 @@ def _find_phase_boundaries(
 
     brake_start_pct = corner_start_pct
     brake_end_pct = apex_pct
+    braking_detected = False
     brake_col = _first_available_column(pre_apex, BRAKE_CHANNEL_PRIORITY)
     if brake_col is not None and not pre_apex.empty:
         brake = pd.to_numeric(pre_apex[brake_col], errors="coerce").fillna(0.0)
         braking_mask = brake >= config.brake_threshold_pct
         if braking_mask.any():
+            braking_detected = True
             braking_rows = pre_apex.loc[braking_mask]
             brake_start_pct = float(braking_rows["distance_pct"].iloc[0])
             brake_end_pct = float(braking_rows["distance_pct"].iloc[-1])
+        else:
+            # No braking signal before apex: treat this corner as a lift/steer phase,
+            # not a braking phase, to avoid misleading downstream coaching.
+            brake_start_pct = float(apex_pct)
+            brake_end_pct = float(apex_pct)
+    else:
+        brake_start_pct = float(apex_pct)
+        brake_end_pct = float(apex_pct)
 
     brake_end_pct = min(brake_end_pct, apex_pct)
-    rotation_start_pct = brake_end_pct
+    rotation_start_pct = brake_end_pct if braking_detected else float(corner_start_pct)
     throttle_col = _first_available_column(post_apex, THROTTLE_CHANNEL_PRIORITY)
     traction_start_pct = _find_traction_start_distance(
         post_apex=post_apex,
