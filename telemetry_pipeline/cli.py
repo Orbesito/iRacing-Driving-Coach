@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,7 +104,11 @@ def _validate_required_channels(df: pd.DataFrame) -> None:
         )
 
 
-def _analyze_single_session(csv_path: Path, label: str) -> SessionAnalysis:
+def _analyze_single_session(
+    csv_path: Path,
+    label: str,
+    output_base_dir: str | Path = "outputs",
+) -> SessionAnalysis:
     print(f"\n[{label}] Loading Mu CSV: {csv_path}")
     _progress(f"[{label}] Parsing Mu CSV metadata and telemetry")
     metadata, units, df, parse_report = load_mu_csv(csv_path)
@@ -153,7 +158,7 @@ def _analyze_single_session(csv_path: Path, label: str) -> SessionAnalysis:
     print(f"  distance_grid_points: {alignment_report['distance_grid_points']}")
 
     out_dir = build_session_output_dir(
-        base_dir="outputs",
+        base_dir=output_base_dir,
         source_csv=csv_path,
         metadata=metadata,
     )
@@ -230,13 +235,47 @@ def _assert_same_track(driver_metadata: dict[str, str], reference_metadata: dict
         )
 
 
-def _format_best_lap_time(lap_times_df: pd.DataFrame) -> str:
+def _best_lap_time_seconds(lap_times_df: pd.DataFrame) -> float:
     if lap_times_df.empty or "lap_time_s" not in lap_times_df.columns:
-        return "n/a"
+        return float("nan")
     lap_series = pd.to_numeric(lap_times_df["lap_time_s"], errors="coerce").dropna()
     if lap_series.empty:
+        return float("nan")
+    return float(lap_series.min())
+
+
+def _compute_optimal_lap_time_seconds(corner_lap_metrics_df: pd.DataFrame) -> float:
+    """
+    Deterministic theoretical optimal lap from best corner_time_s per corner.
+    """
+    if corner_lap_metrics_df.empty:
+        return float("nan")
+    if {"corner_id", "corner_time_s"} - set(corner_lap_metrics_df.columns):
+        return float("nan")
+
+    working = corner_lap_metrics_df.copy()
+    working["corner_time_s"] = pd.to_numeric(working["corner_time_s"], errors="coerce")
+    working = working.dropna(subset=["corner_id", "corner_time_s"])
+    if working.empty:
+        return float("nan")
+    best_per_corner = working.groupby("corner_id", as_index=False)["corner_time_s"].min()
+    if best_per_corner.empty:
+        return float("nan")
+    return float(best_per_corner["corner_time_s"].sum())
+
+
+def _format_time_seconds(value_s: float) -> str:
+    if not math.isfinite(value_s):
         return "n/a"
-    return f"{float(lap_series.min()):.3f} s"
+    return f"{value_s:.3f} s"
+
+
+def _as_float_or_nan(value: object) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("nan")
+    return parsed if math.isfinite(parsed) else float("nan")
 
 
 def _build_pdf_session_context(
@@ -244,6 +283,14 @@ def _build_pdf_session_context(
     corner_report: dict[str, object],
     reference_session: SessionAnalysis | None = None,
 ) -> dict[str, object]:
+    coached_best_lap_s = _as_float_or_nan(corner_report.get("coached_best_lap_time_s"))
+    if not math.isfinite(coached_best_lap_s):
+        coached_best_lap_s = _best_lap_time_seconds(coached_session.lap_times)
+    coached_optimal_lap_s = _as_float_or_nan(corner_report.get("coached_optimal_lap_time_s"))
+    coached_potential_gain_s = _as_float_or_nan(
+        corner_report.get("coached_improvement_potential_s")
+    )
+
     context: dict[str, object] = {
         "coached_driver": coached_session.metadata.get("Driver", "n/a"),
         "coached_vehicle": coached_session.metadata.get("Vehicle", "n/a"),
@@ -255,18 +302,31 @@ def _build_pdf_session_context(
         "session_duration": coached_session.metadata.get("Session Duration", "n/a"),
         "valid_laps": len(coached_session.valid_lap_ids),
         "total_laps": int(len(coached_session.lap_summary)),
-        "coached_best_lap_time_s": _format_best_lap_time(coached_session.lap_times),
+        "coached_best_lap_time_s": _format_time_seconds(coached_best_lap_s),
+        "coached_optimal_lap_time_s": _format_time_seconds(coached_optimal_lap_s),
+        "coached_improvement_potential_s": _format_time_seconds(coached_potential_gain_s),
         "detected_corner_count": corner_report.get(
             "detected_corner_count", corner_report.get("corner_count", "n/a")
         ),
         "expected_corner_count": corner_report.get("expected_corner_count", "n/a"),
     }
     if reference_session is not None:
+        reference_best_lap_s = _as_float_or_nan(corner_report.get("reference_best_lap_time_s"))
+        if not math.isfinite(reference_best_lap_s):
+            reference_best_lap_s = _best_lap_time_seconds(reference_session.lap_times)
+        reference_optimal_lap_s = _as_float_or_nan(
+            corner_report.get("reference_optimal_lap_time_s")
+        )
+        reference_potential_gain_s = _as_float_or_nan(
+            corner_report.get("reference_improvement_potential_s")
+        )
         context.update(
             {
                 "reference_driver": reference_session.metadata.get("Driver", "n/a"),
                 "reference_vehicle": reference_session.metadata.get("Vehicle", "n/a"),
-                "reference_best_lap_time_s": _format_best_lap_time(reference_session.lap_times),
+                "reference_best_lap_time_s": _format_time_seconds(reference_best_lap_s),
+                "reference_optimal_lap_time_s": _format_time_seconds(reference_optimal_lap_s),
+                "reference_improvement_potential_s": _format_time_seconds(reference_potential_gain_s),
             }
         )
     return context
@@ -274,6 +334,9 @@ def _build_pdf_session_context(
 
 def _run_single_session_mode(session: SessionAnalysis) -> None:
     print("\nRunning mode: single-session coaching analysis.")
+    coached_best_lap_s = _best_lap_time_seconds(session.lap_times)
+    coached_optimal_lap_s = float("nan")
+    coached_improvement_potential_s = float("nan")
     if session.aligned_laps.empty or session.lap_times.empty:
         corner_definitions, corner_metrics, corner_ranking, corner_report = _empty_corner_outputs()
         corner_reference = pd.DataFrame()
@@ -304,6 +367,9 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
         )
         _progress("Building best-per-corner reference profile")
         corner_reference = build_best_per_corner_reference(raw_corner_metrics)
+        coached_optimal_lap_s = _compute_optimal_lap_time_seconds(raw_corner_metrics)
+        if math.isfinite(coached_best_lap_s) and math.isfinite(coached_optimal_lap_s):
+            coached_improvement_potential_s = max(0.0, coached_best_lap_s - coached_optimal_lap_s)
         _progress("Scoring corners against best-per-corner reference")
         corner_metrics, corner_ranking = apply_corner_reference(
             corner_lap_metrics_df=raw_corner_metrics,
@@ -324,11 +390,38 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
             "Per-corner benchmark uses the best corner performance found across all valid laps, "
             "not only the globally fastest lap."
         )
+        corner_report["coached_best_lap_time_s"] = (
+            coached_best_lap_s if math.isfinite(coached_best_lap_s) else None
+        )
+        corner_report["coached_optimal_lap_time_s"] = (
+            coached_optimal_lap_s if math.isfinite(coached_optimal_lap_s) else None
+        )
+        corner_report["coached_improvement_potential_s"] = (
+            coached_improvement_potential_s
+            if math.isfinite(coached_improvement_potential_s)
+            else None
+        )
+        corner_report["optimal_lap_note"] = (
+            "Theoretical optimal lap = sum of best corner_time_s across valid laps."
+        )
         corner_report["expected_corner_count"] = expected_count
         corner_report["detected_corner_count"] = detected_count
         corner_report["corner_count_matches_expected"] = (
             expected_count is None or detected_count == expected_count
         )
+
+    corner_report.setdefault(
+        "coached_best_lap_time_s",
+        coached_best_lap_s if math.isfinite(coached_best_lap_s) else None,
+    )
+    corner_report.setdefault(
+        "coached_optimal_lap_time_s",
+        coached_optimal_lap_s if math.isfinite(coached_optimal_lap_s) else None,
+    )
+    corner_report.setdefault(
+        "coached_improvement_potential_s",
+        coached_improvement_potential_s if math.isfinite(coached_improvement_potential_s) else None,
+    )
 
     _progress("Saving corner coaching artifacts")
     corner_paths = save_corner_analysis(
@@ -350,6 +443,11 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
         corner_ranking_df=corner_ranking,
         corner_report=corner_report,
         mode_name="single_session",
+    )
+    coaching_summary["coached_best_lap_time_s"] = _format_time_seconds(coached_best_lap_s)
+    coaching_summary["coached_optimal_lap_time_s"] = _format_time_seconds(coached_optimal_lap_s)
+    coaching_summary["coached_improvement_potential_s"] = _format_time_seconds(
+        coached_improvement_potential_s
     )
     coaching_paths = save_coaching_analysis(
         session.output_dir / "coaching",
@@ -401,6 +499,12 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
 def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: SessionAnalysis) -> None:
     print("\nRunning mode: driver session vs faster reference session.")
     _assert_same_track(driver_session.metadata, reference_session.metadata)
+    coached_best_lap_s = _best_lap_time_seconds(driver_session.lap_times)
+    coached_optimal_lap_s = float("nan")
+    coached_improvement_potential_s = float("nan")
+    reference_best_lap_s = _best_lap_time_seconds(reference_session.lap_times)
+    reference_optimal_lap_s = float("nan")
+    reference_improvement_potential_s = float("nan")
 
     if (
         driver_session.aligned_laps.empty
@@ -443,6 +547,11 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         )
         _progress("Building reference best-per-corner profile")
         reference_corner_profile = build_best_per_corner_reference(reference_raw_metrics)
+        reference_optimal_lap_s = _compute_optimal_lap_time_seconds(reference_raw_metrics)
+        if math.isfinite(reference_best_lap_s) and math.isfinite(reference_optimal_lap_s):
+            reference_improvement_potential_s = max(
+                0.0, reference_best_lap_s - reference_optimal_lap_s
+            )
 
         _progress("Scoring reference session against its own profile")
         reference_metrics_scored, reference_ranking = apply_corner_reference(
@@ -460,6 +569,20 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         )
         reference_report["operation_mode"] = "reference_baseline"
         reference_report["corner_detection_lap_id"] = int(reference_detection_lap_id)
+        reference_report["reference_best_lap_time_s"] = (
+            reference_best_lap_s if math.isfinite(reference_best_lap_s) else None
+        )
+        reference_report["reference_optimal_lap_time_s"] = (
+            reference_optimal_lap_s if math.isfinite(reference_optimal_lap_s) else None
+        )
+        reference_report["reference_improvement_potential_s"] = (
+            reference_improvement_potential_s
+            if math.isfinite(reference_improvement_potential_s)
+            else None
+        )
+        reference_report["optimal_lap_note"] = (
+            "Theoretical optimal lap = sum of best corner_time_s across valid laps."
+        )
         reference_report["expected_corner_count"] = expected_count
         reference_report["detected_corner_count"] = detected_count
         reference_report["corner_count_matches_expected"] = (
@@ -482,6 +605,11 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
             corner_definitions_df=canonical_corner_definitions,
             lap_times_df=driver_session.lap_times,
         )
+        coached_optimal_lap_s = _compute_optimal_lap_time_seconds(driver_raw_metrics)
+        if math.isfinite(coached_best_lap_s) and math.isfinite(coached_optimal_lap_s):
+            coached_improvement_potential_s = max(
+                0.0, coached_best_lap_s - coached_optimal_lap_s
+            )
         _progress("Scoring driver session vs external reference profile")
         driver_corner_metrics, driver_corner_ranking = apply_corner_reference(
             corner_lap_metrics_df=driver_raw_metrics,
@@ -505,11 +633,66 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         )
         driver_corner_report["driver_csv"] = str(driver_session.csv_path)
         driver_corner_report["reference_csv"] = str(reference_session.csv_path)
+        driver_corner_report["reference_session_artifacts_dir"] = str(reference_session.output_dir)
+        driver_corner_report["coached_best_lap_time_s"] = (
+            coached_best_lap_s if math.isfinite(coached_best_lap_s) else None
+        )
+        driver_corner_report["coached_optimal_lap_time_s"] = (
+            coached_optimal_lap_s if math.isfinite(coached_optimal_lap_s) else None
+        )
+        driver_corner_report["coached_improvement_potential_s"] = (
+            coached_improvement_potential_s
+            if math.isfinite(coached_improvement_potential_s)
+            else None
+        )
+        driver_corner_report["reference_best_lap_time_s"] = (
+            reference_best_lap_s if math.isfinite(reference_best_lap_s) else None
+        )
+        driver_corner_report["reference_optimal_lap_time_s"] = (
+            reference_optimal_lap_s if math.isfinite(reference_optimal_lap_s) else None
+        )
+        driver_corner_report["reference_improvement_potential_s"] = (
+            reference_improvement_potential_s
+            if math.isfinite(reference_improvement_potential_s)
+            else None
+        )
+        driver_corner_report["optimal_lap_note"] = (
+            "Theoretical optimal lap = sum of best corner_time_s across valid laps."
+        )
         driver_corner_report["expected_corner_count"] = expected_count
         driver_corner_report["detected_corner_count"] = detected_count
         driver_corner_report["corner_count_matches_expected"] = (
             expected_count is None or detected_count == expected_count
         )
+
+    driver_corner_report.setdefault(
+        "coached_best_lap_time_s",
+        coached_best_lap_s if math.isfinite(coached_best_lap_s) else None,
+    )
+    driver_corner_report.setdefault(
+        "coached_optimal_lap_time_s",
+        coached_optimal_lap_s if math.isfinite(coached_optimal_lap_s) else None,
+    )
+    driver_corner_report.setdefault(
+        "coached_improvement_potential_s",
+        coached_improvement_potential_s
+        if math.isfinite(coached_improvement_potential_s)
+        else None,
+    )
+    driver_corner_report.setdefault(
+        "reference_best_lap_time_s",
+        reference_best_lap_s if math.isfinite(reference_best_lap_s) else None,
+    )
+    driver_corner_report.setdefault(
+        "reference_optimal_lap_time_s",
+        reference_optimal_lap_s if math.isfinite(reference_optimal_lap_s) else None,
+    )
+    driver_corner_report.setdefault(
+        "reference_improvement_potential_s",
+        reference_improvement_potential_s
+        if math.isfinite(reference_improvement_potential_s)
+        else None,
+    )
 
     _progress("Saving driver-vs-reference corner artifacts")
     driver_corner_paths = save_corner_analysis(
@@ -531,6 +714,18 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         corner_ranking_df=driver_corner_ranking,
         corner_report=driver_corner_report,
         mode_name="vs_reference_session",
+    )
+    coaching_summary["coached_best_lap_time_s"] = _format_time_seconds(coached_best_lap_s)
+    coaching_summary["coached_optimal_lap_time_s"] = _format_time_seconds(coached_optimal_lap_s)
+    coaching_summary["coached_improvement_potential_s"] = _format_time_seconds(
+        coached_improvement_potential_s
+    )
+    coaching_summary["reference_best_lap_time_s"] = _format_time_seconds(reference_best_lap_s)
+    coaching_summary["reference_optimal_lap_time_s"] = _format_time_seconds(
+        reference_optimal_lap_s
+    )
+    coaching_summary["reference_improvement_potential_s"] = _format_time_seconds(
+        reference_improvement_potential_s
     )
     coaching_paths = save_coaching_analysis(
         driver_session.output_dir / "coaching_vs_reference",
@@ -605,14 +800,21 @@ def main() -> None:
         raise FileNotFoundError(f"Reference file not found: {reference_csv_path}")
 
     print(f"\nPython interpreter: {sys.executable}")
-    driver_session = _analyze_single_session(driver_csv_path, label="Driver/Self Session")
+    driver_session = _analyze_single_session(
+        driver_csv_path,
+        label="Driver/Self Session",
+        output_base_dir="outputs",
+    )
 
     if reference_csv_path is None:
         _run_single_session_mode(driver_session)
         return
 
+    reference_output_base = driver_session.output_dir / "comparison_reference_session"
     reference_session = _analyze_single_session(
-        reference_csv_path, label="Reference Session"
+        reference_csv_path,
+        label="Reference Session",
+        output_base_dir=reference_output_base,
     )
     _run_vs_reference_mode(driver_session, reference_session)
 

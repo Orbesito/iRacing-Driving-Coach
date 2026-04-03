@@ -125,6 +125,7 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
 - `outputs/<driver-session-id>/coaching_vs_reference/session_coaching_summary.json`
 - `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.json`
 - `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.pdf`
+- `outputs/<driver-session-id>/comparison_reference_session/<reference-session-id>/...` (reference-session ingestion/laps/corners artifacts used in the comparison run)
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
 
@@ -160,6 +161,9 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
   - time loss vs deterministic reference profile
   - variability / inconsistency
   - combined coaching relevance score
+- The report also includes a deterministic theoretical optimal lap time:
+  - optimal lap = sum of best `corner_time_s` across corners
+  - potential gain = best full lap time minus theoretical optimal lap time
 
 ## Mu Export Format Expected
 

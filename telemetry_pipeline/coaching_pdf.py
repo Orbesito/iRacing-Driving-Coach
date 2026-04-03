@@ -284,11 +284,17 @@ def generate_coaching_pdf(
         valid_laps = session_context.get("valid_laps", "n/a")
         total_laps = session_context.get("total_laps", "n/a")
         best_lap_s = session_context.get("coached_best_lap_time_s", "n/a")
+        optimal_lap_s = session_context.get("coached_optimal_lap_time_s", "n/a")
+        improvement_potential_s = session_context.get("coached_improvement_potential_s", "n/a")
         expected_corners = session_context.get("expected_corner_count", "n/a")
         detected_corners = session_context.get("detected_corner_count", "n/a")
         reference_driver = session_context.get("reference_driver", "n/a")
         reference_vehicle = session_context.get("reference_vehicle", "n/a")
         reference_best_lap_s = session_context.get("reference_best_lap_time_s", "n/a")
+        reference_optimal_lap_s = session_context.get("reference_optimal_lap_time_s", "n/a")
+        reference_improvement_potential_s = session_context.get(
+            "reference_improvement_potential_s", "n/a"
+        )
 
         lines = [
             f"Mode: {mode_name}",
@@ -303,6 +309,8 @@ def generate_coaching_pdf(
             f"- Coached Car: {coached_vehicle}",
             f"- Laps Used: {valid_laps} valid / {total_laps} total",
             f"- Coached Best Lap: {best_lap_s}",
+            f"- Coached Theoretical Optimal Lap: {optimal_lap_s}",
+            f"- Coached Potential Gain (Best - Optimal): {improvement_potential_s}",
             f"- Corner Model: detected {detected_corners}, expected {expected_corners}",
         ]
         if mode_name == "vs_reference_session":
@@ -311,6 +319,8 @@ def generate_coaching_pdf(
                     f"- Reference Driver: {reference_driver}",
                     f"- Reference Car: {reference_vehicle}",
                     f"- Reference Best Lap: {reference_best_lap_s}",
+                    f"- Reference Theoretical Optimal Lap: {reference_optimal_lap_s}",
+                    f"- Reference Potential Gain (Best - Optimal): {reference_improvement_potential_s}",
                     f"- Pairing: {coached_driver} (coached) vs {reference_driver} (reference)",
                 ]
             )
