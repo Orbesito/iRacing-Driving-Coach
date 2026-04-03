@@ -23,6 +23,7 @@ class LapValidityConfig:
 
 
 DEFAULT_ALIGNMENT_CHANNELS = [
+    "LapDist",
     "Speed",
     "Speed_kmh",
     "Throttle",

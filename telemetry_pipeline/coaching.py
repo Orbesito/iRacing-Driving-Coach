@@ -204,7 +204,7 @@ def _entry_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[s
             "This corner is effectively a no-brake/lift-and-steer section.",
             "Time is likely lost from line and steering management rather than brake usage.",
             "Prioritize entry positioning and reduce steering corrections so minimum speed is carried cleanly.",
-            "Drill: 3 laps with cue 'place car early, one steering arc, no extra correction'.",
+            "3 laps with cue 'place car early, one steering arc, no extra correction'.",
         )
 
     if (
@@ -216,7 +216,7 @@ def _entry_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[s
             "Entry speed is being over-suppressed.",
             "Braking is too long and too aggressive versus the benchmark, so speed is dropped before apex.",
             "Keep the initial brake hit but shorten the high-pressure phase and release progressively into turn-in.",
-            "Drill: 3 laps focusing on one clean brake release with no second brake squeeze.",
+            "3 laps focusing on one clean brake release with no second brake squeeze.",
         )
     if (
         snapshot["braking_time_delta_s"] < -config.significant_phase_delta_s
@@ -226,13 +226,13 @@ def _entry_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[s
             "Entry is likely rushed into the corner.",
             "A short/late brake phase is forcing a compromised rotation and lower apex speed.",
             "Brake a fraction earlier and prioritize a smoother release to stabilize the front at turn-in.",
-            "Drill: 3 laps with a fixed earlier marker and focus on smooth release quality.",
+            "3 laps with a fixed earlier marker and focus on smooth release quality.",
         )
     return (
         "Entry efficiency is below benchmark.",
         "The corner starts with a speed deficit that carries into the rest of the phase.",
         "Focus on cleaner brake-release timing to carry minimum speed without destabilizing the car.",
-        "Drill: compare two consecutive laps and target identical release timing each lap.",
+        "Compare two consecutive laps and target identical release timing each lap.",
     )
 
 
@@ -245,7 +245,7 @@ def _mid_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[str
             "Rotation is delayed in mid-corner.",
             "Yaw build-up is lower than reference while rotation phase time is longer, indicating late rotation.",
             "Start turn-in slightly earlier and keep light trail-brake support until yaw is established.",
-            "Drill: 3 laps with focus cue 'rotate the car before apex, then release steering early'.",
+            "3 laps with focus cue 'rotate the car before apex, then release steering early'.",
         )
     if (
         snapshot["steer_delta_deg"] > config.significant_steer_delta_deg
@@ -255,7 +255,7 @@ def _mid_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[str
             "Steering demand is too high through rotation.",
             "Extra steering lock with lower apex speed suggests the car is being asked to turn too late.",
             "Reduce steering rate at turn-in and commit to one smooth arc through apex.",
-            "Drill: one-lap reset between attempts, focus on avoiding second steering input.",
+            "One-lap reset between attempts, focus on avoiding second steering input.",
         )
     if (
         snapshot["yaw_delta_deg_s"] > config.significant_yaw_delta_deg_s
@@ -265,13 +265,13 @@ def _mid_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[str
             "Mid-corner platform looks unstable.",
             "High yaw with increased slip indicates excessive rotation corrections through the middle phase.",
             "Soften initial turn-in and prioritize steering stability at minimum speed.",
-            "Drill: 3 laps at 95% entry aggression, then rebuild speed only if stability is maintained.",
+            "3 laps at 95% entry aggression, then rebuild speed only if stability is maintained.",
         )
     return (
         "Mid-corner efficiency is below target.",
         "Rotation phase takes longer than benchmark and speed is not recovered early enough.",
         "Prioritize earlier, cleaner rotation and earlier steering release at apex.",
-        "Drill: compare yaw trace consistency for this corner across 3 consecutive laps.",
+        "Compare yaw trace consistency for this corner across 3 consecutive laps.",
     )
 
 
@@ -284,7 +284,7 @@ def _exit_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[st
             "Throttle-on is late on exit.",
             "Delayed throttle reapplication and longer traction phase are costing exit speed and time.",
             "Open throttle earlier once steering starts to unwind, then use a progressive ramp.",
-            "Drill: 3 laps with cue 'first throttle touch earlier, smoother ramp'.",
+            "3 laps with cue 'first throttle touch earlier, smoother ramp'.",
         )
     if (
         snapshot["traction_delay_vs_ref_pct"] < -config.significant_traction_delay_pct
@@ -294,20 +294,20 @@ def _exit_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[st
             "Throttle application is too aggressive on initial exit.",
             "Earlier throttle with increased wheel-speed spread suggests traction-limited slip events.",
             "Delay first throttle touch slightly and smooth the initial throttle ramp.",
-            "Drill: 3 laps limiting early throttle ramp rate until wheel-speed spread stabilizes.",
+            "3 laps limiting early throttle ramp rate until wheel-speed spread stabilizes.",
         )
     if snapshot["exit_long_accel_delta"] < -config.significant_exit_long_accel_delta:
         return (
             "Exit acceleration is weaker than benchmark.",
             "Longitudinal acceleration is below reference through traction phase.",
             "Prioritize cleaner car placement at apex so throttle can be committed earlier and harder.",
-            "Drill: focus on one corner only and maximize clean full-throttle point repeatability.",
+            "Focus on one corner only and maximize clean full-throttle point repeatability.",
         )
     return (
         "Exit conversion is below benchmark.",
         "Time is being retained in the traction phase rather than released onto the following straight.",
         "Prioritize throttle timing and ramp quality while keeping steering unwind continuous.",
-        "Drill: 3 laps with attention only on full-throttle point consistency.",
+        "3 laps with attention only on full-throttle point consistency.",
     )
 
 
@@ -570,7 +570,7 @@ def _build_coaching_text(
         f"Likely cause: {advice['likely_cause']} "
         f"Evidence: {evidence_text}. "
         f"Recommended action: {advice['recommended_action']} "
-        f"Run focus: {advice['drill_focus']} "
+        f"Practice focus: {advice['drill_focus']} "
         f"Confidence: {advice['confidence_level']} ({float(advice['confidence_score']):.2f})."
     )
     return concise, detailed
@@ -600,6 +600,7 @@ def generate_coaching_outputs(
                 "likely_cause",
                 "recommended_action",
                 "drill_focus",
+                "practice_focus",
                 "confidence_level",
                 "confidence_score",
                 "evidence_json",
@@ -667,6 +668,7 @@ def generate_coaching_outputs(
                 "likely_cause": advice["likely_cause"],
                 "recommended_action": advice["recommended_action"],
                 "drill_focus": advice["drill_focus"],
+                "practice_focus": advice["drill_focus"],
                 "confidence_level": advice["confidence_level"],
                 "confidence_score": advice["confidence_score"],
                 "evidence_json": advice["evidence_json"],
@@ -703,7 +705,7 @@ def generate_coaching_outputs(
                 "corner_name",
                 "primary_phase",
                 "recommended_action",
-                "drill_focus",
+                "practice_focus",
                 "confidence_level",
                 "coaching_summary_concise",
             ]
