@@ -230,6 +230,48 @@ def _assert_same_track(driver_metadata: dict[str, str], reference_metadata: dict
         )
 
 
+def _format_best_lap_time(lap_times_df: pd.DataFrame) -> str:
+    if lap_times_df.empty or "lap_time_s" not in lap_times_df.columns:
+        return "n/a"
+    lap_series = pd.to_numeric(lap_times_df["lap_time_s"], errors="coerce").dropna()
+    if lap_series.empty:
+        return "n/a"
+    return f"{float(lap_series.min()):.3f} s"
+
+
+def _build_pdf_session_context(
+    coached_session: SessionAnalysis,
+    corner_report: dict[str, object],
+    reference_session: SessionAnalysis | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "coached_driver": coached_session.metadata.get("Driver", "n/a"),
+        "coached_vehicle": coached_session.metadata.get("Vehicle", "n/a"),
+        "venue": coached_session.metadata.get("Venue", "n/a"),
+        "session_type": coached_session.metadata.get("Session", "n/a"),
+        "session_date": coached_session.metadata.get("Session Date", "n/a"),
+        "session_time": coached_session.metadata.get("Session Time", "n/a"),
+        "sample_rate": coached_session.metadata.get("Sample Rate", "n/a"),
+        "session_duration": coached_session.metadata.get("Session Duration", "n/a"),
+        "valid_laps": len(coached_session.valid_lap_ids),
+        "total_laps": int(len(coached_session.lap_summary)),
+        "coached_best_lap_time_s": _format_best_lap_time(coached_session.lap_times),
+        "detected_corner_count": corner_report.get(
+            "detected_corner_count", corner_report.get("corner_count", "n/a")
+        ),
+        "expected_corner_count": corner_report.get("expected_corner_count", "n/a"),
+    }
+    if reference_session is not None:
+        context.update(
+            {
+                "reference_driver": reference_session.metadata.get("Driver", "n/a"),
+                "reference_vehicle": reference_session.metadata.get("Vehicle", "n/a"),
+                "reference_best_lap_time_s": _format_best_lap_time(reference_session.lap_times),
+            }
+        )
+    return context
+
+
 def _run_single_session_mode(session: SessionAnalysis) -> None:
     print("\nRunning mode: single-session coaching analysis.")
     if session.aligned_laps.empty or session.lap_times.empty:
@@ -316,6 +358,11 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
     )
     _progress("Generating coaching PDF report")
     try:
+        pdf_context = _build_pdf_session_context(
+            coached_session=session,
+            corner_report=corner_report,
+            reference_session=None,
+        )
         coaching_pdf_path = generate_coaching_pdf(
             out_path=session.output_dir / "coaching" / "coaching_report.pdf",
             mode_name="single_session",
@@ -325,6 +372,7 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
             aligned_laps_df=session.aligned_laps,
             corner_reference_df=corner_reference,
             reference_aligned_laps_df=None,
+            session_context=pdf_context,
         )
     except Exception as exc:
         coaching_pdf_path = None
@@ -491,6 +539,11 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
     )
     _progress("Generating coaching PDF report (driver vs reference)")
     try:
+        pdf_context = _build_pdf_session_context(
+            coached_session=driver_session,
+            corner_report=driver_corner_report,
+            reference_session=reference_session,
+        )
         coaching_pdf_path = generate_coaching_pdf(
             out_path=driver_session.output_dir / "coaching_vs_reference" / "coaching_report.pdf",
             mode_name="vs_reference_session",
@@ -500,6 +553,7 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
             aligned_laps_df=driver_session.aligned_laps,
             corner_reference_df=reference_corner_profile,
             reference_aligned_laps_df=reference_session.aligned_laps,
+            session_context=pdf_context,
         )
     except Exception as exc:
         coaching_pdf_path = None

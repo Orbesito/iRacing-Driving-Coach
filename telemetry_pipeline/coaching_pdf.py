@@ -243,6 +243,7 @@ def generate_coaching_pdf(
     corner_reference_df: pd.DataFrame,
     reference_aligned_laps_df: pd.DataFrame | None = None,
     max_corner_pages: int = 5,
+    session_context: Dict[str, object] | None = None,
 ) -> Path:
     """
     Generate a deterministic PDF coaching report with channel plots + coaching comments.
@@ -271,8 +272,51 @@ def generate_coaching_pdf(
     with PdfPages(output_path) as pdf:
         summary_fig = plt.figure(figsize=(11.0, 8.5))
         summary_fig.suptitle("Driver Coaching Report", fontsize=16, fontweight="bold", y=0.97)
+        session_context = session_context or {}
+        coached_driver = session_context.get("coached_driver", "n/a")
+        coached_vehicle = session_context.get("coached_vehicle", "n/a")
+        venue = session_context.get("venue", "n/a")
+        session_type = session_context.get("session_type", "n/a")
+        session_date = session_context.get("session_date", "n/a")
+        session_time = session_context.get("session_time", "n/a")
+        sample_rate = session_context.get("sample_rate", "n/a")
+        session_duration = session_context.get("session_duration", "n/a")
+        valid_laps = session_context.get("valid_laps", "n/a")
+        total_laps = session_context.get("total_laps", "n/a")
+        best_lap_s = session_context.get("coached_best_lap_time_s", "n/a")
+        expected_corners = session_context.get("expected_corner_count", "n/a")
+        detected_corners = session_context.get("detected_corner_count", "n/a")
+        reference_driver = session_context.get("reference_driver", "n/a")
+        reference_vehicle = session_context.get("reference_vehicle", "n/a")
+        reference_best_lap_s = session_context.get("reference_best_lap_time_s", "n/a")
+
         lines = [
             f"Mode: {mode_name}",
+            "",
+            "Session Context:",
+            f"- Circuit: {venue}",
+            f"- Session Type: {session_type}",
+            f"- Date/Time: {session_date} {session_time}",
+            f"- Sample Rate: {sample_rate}",
+            f"- Session Duration: {session_duration}",
+            f"- Coached Driver: {coached_driver}",
+            f"- Coached Car: {coached_vehicle}",
+            f"- Laps Used: {valid_laps} valid / {total_laps} total",
+            f"- Coached Best Lap: {best_lap_s}",
+            f"- Corner Model: detected {detected_corners}, expected {expected_corners}",
+        ]
+        if mode_name == "vs_reference_session":
+            lines.extend(
+                [
+                    f"- Reference Driver: {reference_driver}",
+                    f"- Reference Car: {reference_vehicle}",
+                    f"- Reference Best Lap: {reference_best_lap_s}",
+                    f"- Pairing: {coached_driver} (coached) vs {reference_driver} (reference)",
+                ]
+            )
+        lines.extend(
+            [
+                "",
             f"Main Entry Issue: {session_summary.get('main_entry_issue', 'n/a')}",
             f"Main Mid-Corner Issue: {session_summary.get('main_mid_issue', 'n/a')}",
             f"Main Exit Issue: {session_summary.get('main_exit_issue', 'n/a')}",
@@ -288,7 +332,8 @@ def generate_coaching_pdf(
             "- X axis uses lap distance in meters when LapDist is available.",
             "",
             "Top 3 Priorities:",
-        ]
+            ]
+        )
         top_priorities = session_summary.get("top_3_priorities", [])
         for idx, item in enumerate(top_priorities, start=1):
             practice_focus = item.get("practice_focus", item.get("drill_focus", "n/a"))
