@@ -18,6 +18,7 @@ from .corner_metrics import (
     detect_main_corners,
 )
 from .coaching import generate_coaching_outputs
+from .coaching_pdf import generate_coaching_pdf
 from .derived_channels import add_derived_units
 from .io_mu_csv import load_mu_csv
 from .lap_processing import (
@@ -313,9 +314,27 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
         corner_coaching_df=corner_coaching_df,
         session_summary=coaching_summary,
     )
+    _progress("Generating coaching PDF report")
+    try:
+        coaching_pdf_path = generate_coaching_pdf(
+            out_path=session.output_dir / "coaching" / "coaching_report.pdf",
+            mode_name="single_session",
+            corner_coaching_df=corner_coaching_df,
+            session_summary=coaching_summary,
+            corner_definitions_df=corner_definitions,
+            aligned_laps_df=session.aligned_laps,
+            corner_reference_df=corner_reference,
+            reference_aligned_laps_df=None,
+        )
+    except Exception as exc:
+        coaching_pdf_path = None
+        print(f"\nPDF report skipped: {exc}")
+
     print("\nSaved coaching artifacts:")
     for key, value in coaching_paths.items():
         print(f"  {key}: {value}")
+    if coaching_pdf_path is not None:
+        print(f"  coaching_report_pdf: {coaching_pdf_path}")
 
     print("\nTop coaching-priority corners:")
     top = corner_ranking.head(5)
@@ -470,9 +489,27 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         corner_coaching_df=corner_coaching_df,
         session_summary=coaching_summary,
     )
+    _progress("Generating coaching PDF report (driver vs reference)")
+    try:
+        coaching_pdf_path = generate_coaching_pdf(
+            out_path=driver_session.output_dir / "coaching_vs_reference" / "coaching_report.pdf",
+            mode_name="vs_reference_session",
+            corner_coaching_df=corner_coaching_df,
+            session_summary=coaching_summary,
+            corner_definitions_df=driver_corner_definitions,
+            aligned_laps_df=driver_session.aligned_laps,
+            corner_reference_df=reference_corner_profile,
+            reference_aligned_laps_df=reference_session.aligned_laps,
+        )
+    except Exception as exc:
+        coaching_pdf_path = None
+        print(f"\nPDF report skipped: {exc}")
+
     print("\nSaved coaching artifacts:")
     for key, value in coaching_paths.items():
         print(f"  {key}: {value}")
+    if coaching_pdf_path is not None:
+        print(f"  coaching_report_pdf: {coaching_pdf_path}")
 
     print("\nTop coaching-priority corners vs reference:")
     top = driver_corner_ranking.head(5)

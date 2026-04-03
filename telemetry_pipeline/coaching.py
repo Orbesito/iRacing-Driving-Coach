@@ -480,6 +480,102 @@ def _build_track_usage_assessment(corner_report: Dict[str, object]) -> str:
     )
 
 
+def _format_signed(value: float, decimals: int = 3) -> str:
+    if not np.isfinite(value):
+        return "n/a"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.{decimals}f}"
+
+
+def _build_coaching_text(
+    corner_name: str,
+    snapshot: Dict[str, float],
+    advice: Dict[str, object],
+) -> Tuple[str, str]:
+    """
+    Build two deterministic coaching text layers:
+    1) concise coach note for quick read
+    2) detailed evidence-backed note for reports
+    """
+    phase = str(advice["primary_phase"])
+    phase_label = {
+        "entry": "Entry",
+        "mid": "Mid-corner",
+        "exit": "Exit",
+    }.get(phase, phase)
+
+    concise = (
+        f"{corner_name} [{phase_label}]: {advice['symptom']} "
+        f"Action: {advice['recommended_action']}"
+    )
+
+    base_evidence = []
+    if np.isfinite(snapshot.get("mean_time_loss_s", np.nan)):
+        base_evidence.append(f"time loss {_format_signed(snapshot['mean_time_loss_s'], 3)} s")
+    if np.isfinite(snapshot.get("inconsistency_time_s", np.nan)):
+        base_evidence.append(
+            f"variability {_format_signed(snapshot['inconsistency_time_s'], 3)} s"
+        )
+    if np.isfinite(snapshot.get("apex_speed_loss_kmh", np.nan)):
+        base_evidence.append(
+            f"apex speed delta {_format_signed(snapshot['apex_speed_loss_kmh'], 2)} km/h"
+        )
+
+    phase_evidence = []
+    if phase == "entry":
+        if np.isfinite(snapshot.get("braking_time_delta_s", np.nan)):
+            phase_evidence.append(
+                f"braking time delta {_format_signed(snapshot['braking_time_delta_s'], 3)} s"
+            )
+        if np.isfinite(snapshot.get("brake_peak_delta_pct", np.nan)):
+            phase_evidence.append(
+                f"brake peak delta {_format_signed(snapshot['brake_peak_delta_pct'], 1)} %"
+            )
+    elif phase == "mid":
+        if np.isfinite(snapshot.get("rotation_time_delta_s", np.nan)):
+            phase_evidence.append(
+                f"rotation time delta {_format_signed(snapshot['rotation_time_delta_s'], 3)} s"
+            )
+        if np.isfinite(snapshot.get("yaw_delta_deg_s", np.nan)):
+            phase_evidence.append(
+                f"yaw delta {_format_signed(snapshot['yaw_delta_deg_s'], 2)} deg/s"
+            )
+        if np.isfinite(snapshot.get("steer_delta_deg", np.nan)):
+            phase_evidence.append(
+                f"steering delta {_format_signed(snapshot['steer_delta_deg'], 2)} deg"
+            )
+    else:
+        if np.isfinite(snapshot.get("traction_time_delta_s", np.nan)):
+            phase_evidence.append(
+                f"traction time delta {_format_signed(snapshot['traction_time_delta_s'], 3)} s"
+            )
+        if np.isfinite(snapshot.get("traction_delay_vs_ref_pct", np.nan)):
+            phase_evidence.append(
+                f"throttle reapply delay {_format_signed(snapshot['traction_delay_vs_ref_pct'], 3)} % lap"
+            )
+        if np.isfinite(snapshot.get("exit_long_accel_delta", np.nan)):
+            phase_evidence.append(
+                f"exit long accel delta {_format_signed(snapshot['exit_long_accel_delta'], 3)} g"
+            )
+
+    if np.isfinite(snapshot.get("apex_position_delta_m", np.nan)):
+        phase_evidence.append(
+            f"apex position offset {_format_signed(snapshot['apex_position_delta_m'], 2)} m"
+        )
+
+    evidence_text = "; ".join(base_evidence + phase_evidence) or "limited telemetry evidence"
+    detailed = (
+        f"{corner_name} | {phase_label} priority. "
+        f"Symptom: {advice['symptom']} "
+        f"Likely cause: {advice['likely_cause']} "
+        f"Evidence: {evidence_text}. "
+        f"Recommended action: {advice['recommended_action']} "
+        f"Run focus: {advice['drill_focus']} "
+        f"Confidence: {advice['confidence_level']} ({float(advice['confidence_score']):.2f})."
+    )
+    return concise, detailed
+
+
 def generate_coaching_outputs(
     corner_lap_metrics_df: pd.DataFrame,
     corner_ranking_df: pd.DataFrame,
@@ -507,6 +603,8 @@ def generate_coaching_outputs(
                 "confidence_level",
                 "confidence_score",
                 "evidence_json",
+                "coaching_summary_concise",
+                "coaching_summary_detailed",
             ]
         )
         summary = {
@@ -550,6 +648,11 @@ def generate_coaching_outputs(
         corner_rows = corner_lap_metrics_df.loc[corner_lap_metrics_df["corner_id"] == corner_id].copy()
         snapshot = _build_corner_snapshot(corner_rows, rank_row)
         advice = _build_corner_advice(snapshot, config)
+        concise_note, detailed_note = _build_coaching_text(
+            corner_name=corner_name,
+            snapshot=snapshot,
+            advice=advice,
+        )
 
         coaching_rows.append(
             {
@@ -567,6 +670,8 @@ def generate_coaching_outputs(
                 "confidence_level": advice["confidence_level"],
                 "confidence_score": advice["confidence_score"],
                 "evidence_json": advice["evidence_json"],
+                "coaching_summary_concise": concise_note,
+                "coaching_summary_detailed": detailed_note,
             }
         )
 
@@ -594,7 +699,14 @@ def generate_coaching_outputs(
     summary = {
         "mode": mode_name,
         "top_3_priorities": top_3[
-            ["corner_name", "primary_phase", "recommended_action", "drill_focus", "confidence_level"]
+            [
+                "corner_name",
+                "primary_phase",
+                "recommended_action",
+                "drill_focus",
+                "confidence_level",
+                "coaching_summary_concise",
+            ]
         ].to_dict(orient="records"),
         "main_entry_issue": entry_rows.iloc[0]["symptom"]
         if not entry_rows.empty

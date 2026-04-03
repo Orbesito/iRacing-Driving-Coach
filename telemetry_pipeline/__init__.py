@@ -13,6 +13,7 @@ from .corner_metrics import (
     detect_main_corners,
 )
 from .coaching import CoachingConfig, generate_coaching_outputs
+from .coaching_pdf import generate_coaching_pdf
 from .io_mu_csv import load_mu_csv
 from .lap_processing import (
     DEFAULT_DISTANCE_STEP_PCT,
@@ -49,6 +50,7 @@ __all__ = [
     "get_valid_lap_ids",
     "load_mu_csv",
     "generate_coaching_outputs",
+    "generate_coaching_pdf",
     "save_coaching_analysis",
     "save_corner_analysis",
     "save_lap_analysis",

@@ -90,6 +90,8 @@ The script always:
 - segments each corner into braking, rotation, and traction phases,
 - computes per-corner coaching metrics and ranking,
 - builds a deterministic coaching interpretation layer (symptom, cause, action, drill, confidence),
+- writes both concise and detailed coaching notes per priority corner,
+- generates a coaching PDF report with channel overlays (speed, brake, throttle, steering, yaw rate, lateral acceleration),
 - saves outputs for next stages.
 
 ## Saved Artifacts
@@ -111,6 +113,7 @@ Every run saves artifacts in a session-specific folder:
 - `outputs/<session-id>/coaching/corner_coaching.csv`
 - `outputs/<session-id>/coaching/session_coaching_summary.json`
 - `outputs/<session-id>/coaching/coaching_report.json`
+- `outputs/<session-id>/coaching/coaching_report.pdf`
 
 When `--reference-csv` is used, additional driver comparison outputs are saved at:
 - `outputs/<driver-session-id>/corners_vs_reference/corner_definitions.csv`
@@ -121,6 +124,7 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
 - `outputs/<driver-session-id>/coaching_vs_reference/corner_coaching.csv`
 - `outputs/<driver-session-id>/coaching_vs_reference/session_coaching_summary.json`
 - `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.json`
+- `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.pdf`
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
 
@@ -173,6 +177,10 @@ The CSV should contain:
   - install with the same interpreter you use to run the script:
     - `python -m pip install pandas`
     - or `py -m pip install pandas`
+- `Missing dependency: matplotlib` (PDF report):
+  - install with the same interpreter you use to run the script:
+    - `python -m pip install matplotlib`
+    - or `py -m pip install matplotlib`
 - `File not found`:
   - check the CSV path and quotes.
 
