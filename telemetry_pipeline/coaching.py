@@ -27,6 +27,7 @@ class CoachingConfig:
     significant_slip_delta: float = 0.02
     significant_exit_long_accel_delta: float = 0.04
     significant_wheel_speed_std_delta: float = 0.12
+    significant_apex_position_delta_m: float = 1.5
 
 
 def _safe_mean(series: pd.Series) -> float:
@@ -122,6 +123,9 @@ def _build_corner_snapshot(corner_rows: pd.DataFrame, ranking_row: pd.Series) ->
             corner_rows["traction_wheel_speed_std_mps"] - corner_rows["ref_traction_wheel_speed_std_mps"]
         )
         if {"traction_wheel_speed_std_mps", "ref_traction_wheel_speed_std_mps"}.issubset(corner_rows.columns)
+        else np.nan,
+        "apex_position_delta_m": _safe_mean(corner_rows["apex_position_delta_m"])
+        if "apex_position_delta_m" in corner_rows.columns
         else np.nan,
     }
 
@@ -287,6 +291,7 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
         ("steer_delta_deg", "steer_delta_vs_ref", "deg"),
         ("exit_long_accel_delta", "exit_long_accel_delta_vs_ref", "g"),
         ("wheel_speed_std_delta", "wheel_speed_std_delta_vs_ref", "m/s"),
+        ("apex_position_delta_m", "apex_position_delta_vs_ref", "m"),
     ]
     for key, label, unit in metric_order:
         value = snapshot.get(key, np.nan)
@@ -373,6 +378,18 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
     else:
         confidence_level = "low"
 
+    if np.isfinite(snapshot.get("apex_position_delta_m", np.nan)) and snapshot[
+        "apex_position_delta_m"
+    ] > config.significant_apex_position_delta_m:
+        action = (
+            action
+            + " Apex placement also differs from benchmark, so prioritize a repeatable entry-to-apex path."
+        )
+        cause = (
+            cause
+            + " Positioning proxy indicates measurable apex-path offset versus benchmark."
+        )
+
     return {
         "primary_phase": primary_phase,
         "symptom": symptom,
@@ -386,11 +403,17 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
 
 
 def _build_track_usage_assessment(corner_report: Dict[str, object]) -> str:
+    if corner_report.get("trajectory_line_feasible", False) and corner_report.get(
+        "apex_position_proxy_available", False
+    ):
+        return (
+            "Apex position deltas versus reference are available and used as a conservative positioning proxy. "
+            "Full entry/apex/exit line-shape analysis is not yet implemented, so positioning conclusions remain limited."
+        )
     if corner_report.get("trajectory_line_feasible", False):
         return (
-            "Lat/Lon channels are available, but this coaching layer currently uses conservative dynamics "
-            "proxies only. Deterministic geometric line/position deltas should be added before strong "
-            "entry/apex/exit positioning claims are made."
+            "Lat/Lon channels are available, but robust geometric line metrics are not yet active in this run. "
+            "Coaching remains centered on stronger brake/rotation/traction evidence."
         )
     return (
         "Track-usage and line-quality assessment is limited: required geometric channels are not robustly "

@@ -86,7 +86,7 @@ The script always:
 - aligns valid laps by distance (`LapDistPct`),
 - includes acceleration channels (`LatAccel`, `LongAccel`) in analysis,
 - includes additional high-value dynamics channels in aligned outputs (`BrakeRaw`, `ThrottleRaw`, wheel speeds, velocity components, `VertAccel`, `Lat`, `Lon`),
-- detects main corners from a deterministic multi-signal profile (speed, yaw, lateral accel, steering),
+- detects corners from a deterministic multi-signal profile (speed, yaw, lateral accel, steering, and path curvature when Lat/Lon is available),
 - segments each corner into braking, rotation, and traction phases,
 - computes per-corner coaching metrics and ranking,
 - builds a deterministic coaching interpretation layer (symptom, cause, action, drill, confidence),
@@ -141,14 +141,17 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
   - speed deficit,
   - yaw-rate demand,
   - lateral acceleration,
-  - steering demand.
+  - steering demand,
+  - path curvature (when `Lat`/`Lon` is available).
 - Corner boundaries are defined from neighboring apex midpoints.
+- For known tracks with an official turn-count mapping (currently Miami GP), detection is constrained to that official corner count for clearer T1/T2/... references.
 - Per-corner phase boundaries are represented as:
   - braking phase (`brake_start_pct` to `brake_end_pct`)
   - rotation phase (`rotation_start_pct` to `rotation_end_pct`, around apex)
   - traction phase (`traction_start_pct` to `corner_end_pct`)
 - Raw pedal channels are used when available (`BrakeRaw`, `ThrottleRaw`) for phase detection and pedal metrics.
 - Additional outputs include traction wheel-speed spread and body-slip proxy from velocity channels when available.
+- A conservative positioning proxy (`apex_position_delta_m` vs reference) is included when `Lat/Lon` channels are present.
 - Per-corner ranking supports:
   - time loss vs deterministic reference profile
   - variability / inconsistency

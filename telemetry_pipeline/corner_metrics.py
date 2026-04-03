@@ -15,15 +15,18 @@ class CornerDetectionConfig:
 
     speed_smoothing_window_points: int = 9
     activity_smoothing_window_points: int = 5
-    activity_quantile_threshold: float = 0.55
+    activity_quantile_threshold: float = 0.50
     min_corner_count: int = 10
     max_corner_count: int = 25
-    min_corner_spacing_pct: float = 1.2
+    min_corner_spacing_pct: float = 0.8
     speed_apex_search_window_pct: float = 1.5
     min_activity_score: float = 0.12
+    curvature_smoothing_window_points: int = 9
+    curvature_weight: float = 0.35
     brake_threshold_pct: float = 5.0
     throttle_reapply_threshold_pct: float = 10.0
     throttle_reapply_consecutive_points: int = 3
+    target_corner_count: int | None = None
 
 
 BRAKE_CHANNEL_PRIORITY = ["BrakeRaw", "Brake"]
@@ -48,6 +51,8 @@ REFERENCE_METRIC_MAP = {
     "traction_exit_throttle_raw_mean_pct": "ref_traction_exit_throttle_raw_mean_pct",
     "traction_exit_long_accel_mean": "ref_traction_exit_long_accel_mean",
     "traction_wheel_speed_std_mps": "ref_traction_wheel_speed_std_mps",
+    "apex_lat": "ref_apex_lat",
+    "apex_lon": "ref_apex_lon",
 }
 
 
@@ -145,6 +150,49 @@ def _normalise_feature_abs(series: pd.Series, quantile: float = 0.99) -> pd.Seri
     return (values / scale).clip(lower=0.0, upper=1.0)
 
 
+def _path_curvature_activity(
+    lap_df: pd.DataFrame,
+    smoothing_window_points: int,
+) -> pd.Series:
+    """
+    Compute a deterministic curvature proxy from Lat/Lon path geometry.
+    Returns zeros if path channels are unavailable.
+    """
+    if "Lat" not in lap_df.columns or "Lon" not in lap_df.columns:
+        return pd.Series(np.zeros(len(lap_df)), index=lap_df.index)
+
+    lat = pd.to_numeric(lap_df["Lat"], errors="coerce").interpolate(limit_direction="both")
+    lon = pd.to_numeric(lap_df["Lon"], errors="coerce").interpolate(limit_direction="both")
+    if lat.dropna().empty or lon.dropna().empty:
+        return pd.Series(np.zeros(len(lap_df)), index=lap_df.index)
+
+    lat = lat.fillna(lat.median())
+    lon = lon.fillna(lon.median())
+    mean_lat_rad = np.deg2rad(float(lat.mean()))
+
+    # Local tangent-plane approximation is sufficient for one circuit lap.
+    x_m = (lon - float(lon.mean())) * (111_320.0 * np.cos(mean_lat_rad))
+    y_m = (lat - float(lat.mean())) * 111_320.0
+
+    dx = np.gradient(x_m.to_numpy(dtype=float))
+    dy = np.gradient(y_m.to_numpy(dtype=float))
+    heading = np.unwrap(np.arctan2(dy, dx))
+
+    distance_pct = pd.to_numeric(lap_df["distance_pct"], errors="coerce").to_numpy(dtype=float)
+    distance_pct = np.nan_to_num(distance_pct, nan=0.0)
+    if len(distance_pct) >= 2:
+        for i in range(1, len(distance_pct)):
+            if distance_pct[i] <= distance_pct[i - 1]:
+                distance_pct[i] = distance_pct[i - 1] + 1e-6
+
+    curvature = np.abs(np.gradient(heading, distance_pct))
+    curvature_series = pd.Series(curvature, index=lap_df.index)
+    curvature_series = curvature_series.rolling(
+        window=smoothing_window_points, center=True, min_periods=1
+    ).mean()
+    return _normalise_feature_abs(curvature_series, quantile=0.98)
+
+
 def _select_spaced_candidates(
     candidates_df: pd.DataFrame,
     score_col: str,
@@ -161,6 +209,57 @@ def _select_spaced_candidates(
             selected.append(candidate_dist)
         if len(selected) >= max_count:
             break
+    return sorted(selected)
+
+
+def _select_target_count_candidates(
+    candidates_df: pd.DataFrame,
+    score_col: str,
+    target_count: int,
+    initial_spacing_pct: float,
+) -> List[float]:
+    spacing = max(0.2, float(initial_spacing_pct))
+    selected = _select_spaced_candidates(
+        candidates_df,
+        score_col=score_col,
+        min_spacing_pct=spacing,
+        max_count=target_count,
+    )
+
+    while len(selected) < target_count and spacing > 0.2:
+        spacing *= 0.85
+        selected = _select_spaced_candidates(
+            candidates_df,
+            score_col=score_col,
+            min_spacing_pct=spacing,
+            max_count=target_count,
+        )
+
+    if len(selected) < target_count:
+        all_candidates = (
+            candidates_df.sort_values(score_col, ascending=False)["distance_pct"]
+            .astype(float)
+            .tolist()
+        )
+        for candidate in all_candidates:
+            if candidate in selected:
+                continue
+            if all(_circular_distance_pct(candidate, existing) >= 0.15 for existing in selected):
+                selected.append(candidate)
+            if len(selected) >= target_count:
+                break
+
+    if len(selected) > target_count:
+        selected_df = candidates_df.loc[
+            candidates_df["distance_pct"].isin([round(x, 6) for x in selected])
+        ].copy()
+        selected = (
+            selected_df.sort_values(score_col, ascending=False)
+            .head(target_count)["distance_pct"]
+            .astype(float)
+            .tolist()
+        )
+
     return sorted(selected)
 
 
@@ -294,21 +393,37 @@ def detect_main_corners(
     else:
         steer_abs = pd.Series(np.zeros(len(ref)))
 
-    activity_raw = (
-        0.35 * _normalise_feature_abs(yaw_abs)
-        + 0.30 * _normalise_feature_abs(lat_acc_abs)
-        + 0.20 * _normalise_feature_abs(steer_abs)
-        + 0.15 * _normalise_feature_abs(speed_deficit)
+    yaw_norm = _normalise_feature_abs(yaw_abs)
+    lat_acc_norm = _normalise_feature_abs(lat_acc_abs)
+    steer_norm = _normalise_feature_abs(steer_abs)
+    speed_norm = _normalise_feature_abs(speed_deficit)
+    curvature_norm = _path_curvature_activity(
+        ref, smoothing_window_points=config.curvature_smoothing_window_points
     )
+
+    dynamic_activity = 0.35 * yaw_norm + 0.30 * lat_acc_norm + 0.20 * steer_norm + 0.15 * speed_norm
+    curvature_weight = float(np.clip(config.curvature_weight, 0.0, 0.70))
+    activity_raw = (1.0 - curvature_weight) * dynamic_activity + curvature_weight * curvature_norm
     ref["corner_activity"] = activity_raw.rolling(
         window=config.activity_smoothing_window_points, center=True, min_periods=1
     ).mean()
+    ref["path_curvature_activity"] = curvature_norm
 
-    peak_idx = []
+    peak_idx_activity = []
     activity = ref["corner_activity"].to_numpy(dtype=float)
     for i in range(1, len(activity) - 1):
         if activity[i] >= activity[i - 1] and activity[i] > activity[i + 1]:
-            peak_idx.append(i)
+            peak_idx_activity.append(i)
+    if not peak_idx_activity:
+        peak_idx_activity = [int(np.nanargmax(activity))]
+
+    curvature = ref["path_curvature_activity"].to_numpy(dtype=float)
+    peak_idx_curvature = []
+    for i in range(1, len(curvature) - 1):
+        if curvature[i] >= curvature[i - 1] and curvature[i] > curvature[i + 1]:
+            peak_idx_curvature.append(i)
+
+    peak_idx = sorted(set(peak_idx_activity + peak_idx_curvature))
     if not peak_idx:
         peak_idx = [int(np.nanargmax(activity))]
 
@@ -316,10 +431,18 @@ def detect_main_corners(
         {
             "distance_pct": ref.loc[peak_idx, "distance_pct"].to_numpy(dtype=float),
             "activity_score": ref.loc[peak_idx, "corner_activity"].to_numpy(dtype=float),
+            "curvature_score": ref.loc[peak_idx, "path_curvature_activity"].to_numpy(dtype=float),
         }
     )
+    peak_candidates["composite_score"] = (
+        0.75 * peak_candidates["activity_score"] + 0.25 * peak_candidates["curvature_score"]
+    )
+
+    threshold_quantile = config.activity_quantile_threshold
+    if config.target_corner_count is not None:
+        threshold_quantile = min(threshold_quantile, 0.40)
     threshold = max(
-        float(np.nanquantile(activity, config.activity_quantile_threshold)),
+        float(np.nanquantile(activity, threshold_quantile)),
         config.min_activity_score,
     )
     peak_candidates = peak_candidates.loc[peak_candidates["activity_score"] >= threshold].copy()
@@ -328,7 +451,11 @@ def detect_main_corners(
             {
                 "distance_pct": ref.loc[peak_idx, "distance_pct"].to_numpy(dtype=float),
                 "activity_score": ref.loc[peak_idx, "corner_activity"].to_numpy(dtype=float),
+                "curvature_score": ref.loc[peak_idx, "path_curvature_activity"].to_numpy(dtype=float),
             }
+        )
+        peak_candidates["composite_score"] = (
+            0.75 * peak_candidates["activity_score"] + 0.25 * peak_candidates["curvature_score"]
         )
 
     refined = []
@@ -349,6 +476,8 @@ def detect_main_corners(
             {
                 "distance_pct": apex_dist,
                 "activity_score": float(peak["activity_score"]),
+                "curvature_score": float(peak.get("curvature_score", 0.0)),
+                "composite_score": float(peak.get("composite_score", peak["activity_score"])),
                 "speed_kmh": apex_speed,
             }
         )
@@ -360,38 +489,55 @@ def detect_main_corners(
     refined_df["distance_pct"] = refined_df["distance_pct"].round(6)
     refined_df = (
         refined_df.groupby("distance_pct", as_index=False)
-        .agg({"activity_score": "max", "speed_kmh": "min"})
+        .agg(
+            {
+                "activity_score": "max",
+                "curvature_score": "max",
+                "composite_score": "max",
+                "speed_kmh": "min",
+            }
+        )
         .sort_values("distance_pct")
     )
 
-    apex_distances = _select_spaced_candidates(
-        refined_df,
-        score_col="activity_score",
-        min_spacing_pct=config.min_corner_spacing_pct,
-        max_count=config.max_corner_count,
-    )
-
-    if len(apex_distances) < config.min_corner_count:
-        spacing = config.min_corner_spacing_pct
-        while len(apex_distances) < config.min_corner_count and spacing > 0.4:
-            spacing *= 0.85
-            apex_distances = _select_spaced_candidates(
-                refined_df,
-                score_col="activity_score",
-                min_spacing_pct=spacing,
-                max_count=config.max_corner_count,
-            )
-
-    if len(apex_distances) < config.min_corner_count:
-        apex_distances = (
-            refined_df.sort_values("activity_score", ascending=False)
-            .head(config.min_corner_count)["distance_pct"]
-            .astype(float)
-            .sort_values()
-            .tolist()
+    target_count = config.target_corner_count
+    if target_count is not None:
+        target_count = int(np.clip(target_count, config.min_corner_count, config.max_corner_count))
+        apex_distances = _select_target_count_candidates(
+            refined_df,
+            score_col="composite_score",
+            target_count=target_count,
+            initial_spacing_pct=config.min_corner_spacing_pct,
+        )
+    else:
+        apex_distances = _select_spaced_candidates(
+            refined_df,
+            score_col="composite_score",
+            min_spacing_pct=config.min_corner_spacing_pct,
+            max_count=config.max_corner_count,
         )
 
-    apex_distances = sorted(apex_distances[: config.max_corner_count])
+        if len(apex_distances) < config.min_corner_count:
+            spacing = config.min_corner_spacing_pct
+            while len(apex_distances) < config.min_corner_count and spacing > 0.25:
+                spacing *= 0.85
+                apex_distances = _select_spaced_candidates(
+                    refined_df,
+                    score_col="composite_score",
+                    min_spacing_pct=spacing,
+                    max_count=config.max_corner_count,
+                )
+
+        if len(apex_distances) < config.min_corner_count:
+            apex_distances = (
+                refined_df.sort_values("composite_score", ascending=False)
+                .head(config.min_corner_count)["distance_pct"]
+                .astype(float)
+                .sort_values()
+                .tolist()
+            )
+
+        apex_distances = sorted(apex_distances[: config.max_corner_count])
     if not apex_distances:
         raise ValueError("Corner detection failed to produce any apex points.")
 
@@ -415,6 +561,7 @@ def detect_main_corners(
         rows.append(
             {
                 "corner_id": i + 1,
+                "official_turn_number": i + 1,
                 "corner_name": f"T{i + 1}",
                 "corner_start_pct": float(corner_start_pct),
                 "brake_start_pct": phase["brake_start_pct"],
@@ -426,6 +573,7 @@ def detect_main_corners(
                 "corner_end_pct": float(corner_end_pct),
                 "reference_apex_speed_kmh": apex_speed,
                 "detection_activity_score": activity_score,
+                "detection_curvature_score": float(apex_row.get("path_curvature_activity", np.nan)),
             }
         )
 
@@ -512,6 +660,28 @@ def _normalise_positive(series: pd.Series) -> pd.Series:
     if max_value <= 0.0:
         return pd.Series(np.zeros(len(clipped)), index=clipped.index)
     return clipped / max_value
+
+
+def _haversine_distance_m(
+    lat1_deg: pd.Series,
+    lon1_deg: pd.Series,
+    lat2_deg: pd.Series,
+    lon2_deg: pd.Series,
+) -> pd.Series:
+    """
+    Deterministic geodesic approximation for small lap-scale position deltas.
+    """
+    lat1 = np.deg2rad(pd.to_numeric(lat1_deg, errors="coerce").to_numpy(dtype=float))
+    lon1 = np.deg2rad(pd.to_numeric(lon1_deg, errors="coerce").to_numpy(dtype=float))
+    lat2 = np.deg2rad(pd.to_numeric(lat2_deg, errors="coerce").to_numpy(dtype=float))
+    lon2 = np.deg2rad(pd.to_numeric(lon2_deg, errors="coerce").to_numpy(dtype=float))
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
+    c = 2.0 * np.arctan2(np.sqrt(np.clip(a, 0.0, 1.0)), np.sqrt(np.clip(1.0 - a, 0.0, 1.0)))
+    distance = 6_371_000.0 * c
+    return pd.Series(distance, index=lat1_deg.index)
 
 
 def _wheel_speed_std_mean(segment_df: pd.DataFrame) -> float:
@@ -620,6 +790,16 @@ def compute_corner_lap_metrics(
                             if apex_row is not None and "Speed" in apex_row.index
                             else np.nan
                         )
+                    ),
+                    "apex_lat": (
+                        float(apex_row["Lat"])
+                        if apex_row is not None and "Lat" in apex_row.index
+                        else np.nan
+                    ),
+                    "apex_lon": (
+                        float(apex_row["Lon"])
+                        if apex_row is not None and "Lon" in apex_row.index
+                        else np.nan
                     ),
                     "rotation_min_speed_kmh": (
                         _safe_min(rotation_seg["Speed_kmh"])
@@ -773,6 +953,15 @@ def apply_corner_reference(
     enriched["traction_delay_vs_ref_pct"] = (
         enriched["traction_reapply_delay_pct"] - enriched["ref_traction_reapply_delay_pct"]
     )
+    if {"apex_lat", "apex_lon", "ref_apex_lat", "ref_apex_lon"}.issubset(enriched.columns):
+        enriched["apex_position_delta_m"] = _haversine_distance_m(
+            enriched["apex_lat"],
+            enriched["apex_lon"],
+            enriched["ref_apex_lat"],
+            enriched["ref_apex_lon"],
+        )
+    else:
+        enriched["apex_position_delta_m"] = np.nan
 
     if exclude_reference_rows:
         comparison = enriched.loc[
@@ -791,6 +980,7 @@ def apply_corner_reference(
         inconsistency_time_s=("corner_time_s", "std"),
         mean_apex_speed_loss_kmh=("apex_speed_loss_vs_ref_kmh", "mean"),
         mean_traction_delay_loss_pct=("traction_delay_vs_ref_pct", "mean"),
+        mean_apex_position_delta_m=("apex_position_delta_m", "mean"),
     )
     ranking = agg.reset_index()
     ranking["std_time_loss_s"] = ranking["std_time_loss_s"].fillna(0.0)
@@ -798,6 +988,7 @@ def apply_corner_reference(
     ranking["mean_time_loss_s"] = ranking["mean_time_loss_s"].fillna(0.0)
     ranking["mean_apex_speed_loss_kmh"] = ranking["mean_apex_speed_loss_kmh"].fillna(0.0)
     ranking["mean_traction_delay_loss_pct"] = ranking["mean_traction_delay_loss_pct"].fillna(0.0)
+    ranking["mean_apex_position_delta_m"] = ranking["mean_apex_position_delta_m"].fillna(0.0)
 
     norm_time_loss = _normalise_positive(ranking["mean_time_loss_s"])
     norm_variability = _normalise_positive(ranking["inconsistency_time_s"])
@@ -824,6 +1015,7 @@ def build_corner_report(
     reference_source: str,
 ) -> Dict[str, object]:
     trajectory_line_feasible = {"Lat", "Lon"}.issubset(set(aligned_laps_df.columns))
+    apex_position_proxy_available = "apex_position_delta_m" in set(corner_lap_metrics_df.columns)
     trajectory_note = (
         "Lat/Lon available in aligned data: deterministic line delta metrics can be added."
         if trajectory_line_feasible
@@ -839,6 +1031,7 @@ def build_corner_report(
         if not corner_lap_metrics_df.empty
         else 0,
         "trajectory_line_feasible": bool(trajectory_line_feasible),
+        "apex_position_proxy_available": bool(apex_position_proxy_available),
         "trajectory_line_note": trajectory_note,
         "coaching_score_formula": (
             "0.60*normalized(mean_time_loss_s) + "

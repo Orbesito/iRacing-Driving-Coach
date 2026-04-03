@@ -59,6 +59,7 @@ def _empty_corner_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, d
     corner_definitions = pd.DataFrame(
         columns=[
             "corner_id",
+            "official_turn_number",
             "corner_name",
             "corner_start_pct",
             "brake_start_pct",
@@ -70,6 +71,7 @@ def _empty_corner_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, d
             "corner_end_pct",
             "reference_apex_speed_kmh",
             "detection_activity_score",
+            "detection_curvature_score",
         ]
     )
     corner_metrics = pd.DataFrame()
@@ -195,6 +197,27 @@ def _normalise_text(value: str) -> str:
     return " ".join(value.lower().split())
 
 
+def _infer_expected_corner_count(metadata: dict[str, str]) -> int | None:
+    """
+    Deterministic track metadata lookup for official turn counts where known.
+    """
+    venue = _normalise_text(metadata.get("Venue", ""))
+    if "miami" in venue and "gp" in venue:
+        return 19
+    return None
+
+
+def _build_corner_detection_config(metadata: dict[str, str]) -> CornerDetectionConfig:
+    expected_count = _infer_expected_corner_count(metadata)
+    if expected_count is None:
+        return CornerDetectionConfig()
+    return CornerDetectionConfig(
+        min_corner_count=expected_count,
+        max_corner_count=expected_count,
+        target_corner_count=expected_count,
+    )
+
+
 def _assert_same_track(driver_metadata: dict[str, str], reference_metadata: dict[str, str]) -> None:
     driver_venue = _normalise_text(driver_metadata.get("Venue", ""))
     reference_venue = _normalise_text(reference_metadata.get("Venue", ""))
@@ -214,12 +237,21 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
     else:
         detection_lap_id = choose_reference_lap(session.lap_times)
         print(f"Corner detection lap (fastest valid lap): {detection_lap_id}")
+        corner_config = _build_corner_detection_config(session.metadata)
         _progress("Detecting main corners and phase boundaries")
         corner_definitions = detect_main_corners(
             aligned_laps_df=session.aligned_laps,
             reference_lap_id=detection_lap_id,
-            config=CornerDetectionConfig(),
+            config=corner_config,
         )
+        detected_count = int(len(corner_definitions))
+        expected_count = _infer_expected_corner_count(session.metadata)
+        if expected_count is not None:
+            print(
+                f"Detected corners: {detected_count} (expected official map turns: {expected_count})"
+            )
+        else:
+            print(f"Detected corners: {detected_count}")
 
         _progress("Computing per-corner metrics for all valid laps")
         raw_corner_metrics = compute_corner_lap_metrics(
@@ -248,6 +280,11 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
         corner_report["reference_note"] = (
             "Per-corner benchmark uses the best corner performance found across all valid laps, "
             "not only the globally fastest lap."
+        )
+        corner_report["expected_corner_count"] = expected_count
+        corner_report["detected_corner_count"] = detected_count
+        corner_report["corner_count_matches_expected"] = (
+            expected_count is None or detected_count == expected_count
         )
 
     _progress("Saving corner coaching artifacts")
@@ -311,6 +348,7 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
     else:
         reference_detection_lap_id = choose_reference_lap(reference_session.lap_times)
         print(f"Reference corner detection lap: {reference_detection_lap_id}")
+        corner_config = _build_corner_detection_config(reference_session.metadata)
 
         # Stable corner IDs: corner definitions are detected once on reference session
         # and then reused for both sessions.
@@ -318,8 +356,17 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         canonical_corner_definitions = detect_main_corners(
             aligned_laps_df=reference_session.aligned_laps,
             reference_lap_id=reference_detection_lap_id,
-            config=CornerDetectionConfig(),
+            config=corner_config,
         )
+        detected_count = int(len(canonical_corner_definitions))
+        expected_count = _infer_expected_corner_count(reference_session.metadata)
+        if expected_count is not None:
+            print(
+                f"Detected canonical corners: {detected_count} "
+                f"(expected official map turns: {expected_count})"
+            )
+        else:
+            print(f"Detected canonical corners: {detected_count}")
 
         _progress("Computing reference-session per-corner metrics")
         reference_raw_metrics = compute_corner_lap_metrics(
@@ -346,6 +393,11 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         )
         reference_report["operation_mode"] = "reference_baseline"
         reference_report["corner_detection_lap_id"] = int(reference_detection_lap_id)
+        reference_report["expected_corner_count"] = expected_count
+        reference_report["detected_corner_count"] = detected_count
+        reference_report["corner_count_matches_expected"] = (
+            expected_count is None or detected_count == expected_count
+        )
 
         _progress("Saving reference-session corner artifacts")
         save_corner_analysis(
@@ -386,6 +438,11 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         )
         driver_corner_report["driver_csv"] = str(driver_session.csv_path)
         driver_corner_report["reference_csv"] = str(reference_session.csv_path)
+        driver_corner_report["expected_corner_count"] = expected_count
+        driver_corner_report["detected_corner_count"] = detected_count
+        driver_corner_report["corner_count_matches_expected"] = (
+            expected_count is None or detected_count == expected_count
+        )
 
     _progress("Saving driver-vs-reference corner artifacts")
     driver_corner_paths = save_corner_analysis(

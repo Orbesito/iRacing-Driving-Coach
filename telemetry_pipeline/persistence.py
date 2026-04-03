@@ -182,6 +182,8 @@ def save_corner_analysis(
                 "ref_corner_time_s",
                 "ref_apex_speed_kmh",
                 "ref_traction_reapply_delay_pct",
+                "ref_apex_lat",
+                "ref_apex_lon",
             ]
         )
     corner_reference_df.to_csv(corner_reference_path, index=False)
