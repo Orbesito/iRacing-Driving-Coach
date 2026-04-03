@@ -19,6 +19,7 @@ class CornerDetectionConfig:
     min_corner_count: int = 10
     max_corner_count: int = 25
     min_corner_spacing_pct: float = 0.8
+    min_corner_spacing_m: float = 90.0
     speed_apex_search_window_pct: float = 1.5
     min_activity_score: float = 0.12
     curvature_smoothing_window_points: int = 9
@@ -148,6 +149,48 @@ def _normalise_feature_abs(series: pd.Series, quantile: float = 0.99) -> pd.Seri
     if not np.isfinite(scale) or scale <= 0.0:
         return pd.Series(np.zeros(len(values)), index=values.index)
     return (values / scale).clip(lower=0.0, upper=1.0)
+
+
+def _estimate_lap_length_m_from_lat_lon(ref_lap_df: pd.DataFrame) -> float:
+    """
+    Estimate lap length from Lat/Lon samples (deterministic, lap-local).
+    """
+    if "Lat" not in ref_lap_df.columns or "Lon" not in ref_lap_df.columns:
+        return np.nan
+
+    lat_deg = pd.to_numeric(ref_lap_df["Lat"], errors="coerce").to_numpy(dtype=float)
+    lon_deg = pd.to_numeric(ref_lap_df["Lon"], errors="coerce").to_numpy(dtype=float)
+    valid = np.isfinite(lat_deg) & np.isfinite(lon_deg)
+    lat_deg = lat_deg[valid]
+    lon_deg = lon_deg[valid]
+    if lat_deg.size < 3:
+        return np.nan
+
+    lat_rad = np.deg2rad(lat_deg)
+    lon_rad = np.deg2rad(lon_deg)
+    dlat = np.diff(lat_rad)
+    dlon = np.diff(lon_rad)
+    a = np.sin(dlat / 2.0) ** 2 + np.cos(lat_rad[:-1]) * np.cos(lat_rad[1:]) * np.sin(
+        dlon / 2.0
+    ) ** 2
+    c = 2.0 * np.arctan2(np.sqrt(np.clip(a, 0.0, 1.0)), np.sqrt(np.clip(1.0 - a, 0.0, 1.0)))
+    return float(np.nansum(6_371_000.0 * c))
+
+
+def _effective_min_corner_spacing_pct(ref_lap_df: pd.DataFrame, config: CornerDetectionConfig) -> float:
+    """
+    Compute track-agnostic minimum apex spacing in percent-lap.
+    Uses a meter-based spacing target when lap length can be estimated.
+    """
+    spacing_pct = float(max(config.min_corner_spacing_pct, 0.15))
+    spacing_m = float(max(config.min_corner_spacing_m, 10.0))
+
+    lap_length_m = _estimate_lap_length_m_from_lat_lon(ref_lap_df)
+    if np.isfinite(lap_length_m) and lap_length_m > 100.0:
+        spacing_from_m_pct = (spacing_m / lap_length_m) * 100.0
+        spacing_pct = max(spacing_pct, float(spacing_from_m_pct))
+
+    return float(np.clip(spacing_pct, 0.15, 8.0))
 
 
 def _path_curvature_activity(
@@ -510,6 +553,8 @@ def detect_main_corners(
         .sort_values("distance_pct")
     )
 
+    min_spacing_pct = _effective_min_corner_spacing_pct(ref, config)
+
     target_count = config.target_corner_count
     if target_count is not None:
         target_count = int(np.clip(target_count, config.min_corner_count, config.max_corner_count))
@@ -517,18 +562,18 @@ def detect_main_corners(
             refined_df,
             score_col="composite_score",
             target_count=target_count,
-            initial_spacing_pct=config.min_corner_spacing_pct,
+            initial_spacing_pct=min_spacing_pct,
         )
     else:
         apex_distances = _select_spaced_candidates(
             refined_df,
             score_col="composite_score",
-            min_spacing_pct=config.min_corner_spacing_pct,
+            min_spacing_pct=min_spacing_pct,
             max_count=config.max_corner_count,
         )
 
         if len(apex_distances) < config.min_corner_count:
-            spacing = config.min_corner_spacing_pct
+            spacing = min_spacing_pct
             while len(apex_distances) < config.min_corner_count and spacing > 0.25:
                 spacing *= 0.85
                 apex_distances = _select_spaced_candidates(

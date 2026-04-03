@@ -149,6 +149,7 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
   - steering demand,
   - path curvature (when `Lat`/`Lon` is available).
 - Corner boundaries are defined from neighboring apex midpoints.
+- Apex candidates are filtered with a minimum physical spacing target (meters), converted to `% lap` using estimated lap length from `Lat/Lon` when available. This reduces over-splitting of one complex into multiple false corners on different track lengths.
 - For known tracks with an official turn-count mapping (currently Miami GP), detection is constrained to that official corner count for clearer T1/T2/... references.
 - Per-corner phase boundaries are represented as:
   - braking phase (`brake_start_pct` to `brake_end_pct`)
