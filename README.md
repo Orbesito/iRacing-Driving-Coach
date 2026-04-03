@@ -165,6 +165,29 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
   - optimal lap = sum of best `corner_time_s` across corners
   - potential gain = best full lap time minus theoretical optimal lap time
 
+## Interpreting Confidence and Priority Score (Academic Use)
+
+- `coaching_priority_rank` orders corners by intervention value (1 = highest priority).
+- The ranking is computed deterministically from:
+  - time loss versus the selected reference,
+  - variability/inconsistency across valid laps,
+  - coaching relevance weighting from the phase and symptom evidence.
+- In single-session mode, the reference is built from the driver's best corner segment per corner.
+- In vs-reference mode, the reference is built from the faster reference driver session.
+- `confidence` (0.00 to 1.00) expresses evidence strength for the coaching conclusion, not driver quality.
+- Confidence increases when:
+  - the signal pattern is consistent across laps,
+  - multiple channels support the same diagnosis (for example speed + brake + yaw),
+  - core channels needed for that diagnosis are available.
+- Confidence decreases when:
+  - evidence is weak or contradictory,
+  - behavior varies strongly lap to lap,
+  - key channels for that inference are missing.
+- Suggested interpretation bands:
+  - `>= 0.80`: high confidence (safe to prioritise immediately),
+  - `0.60 to 0.79`: medium confidence (good candidate, verify with overlays),
+  - `< 0.60`: low confidence (treat as hypothesis, require extra validation).
+
 ## Mu Export Format Expected
 
 The CSV should contain:
