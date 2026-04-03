@@ -89,6 +89,7 @@ The script always:
 - detects main corners from a deterministic multi-signal profile (speed, yaw, lateral accel, steering),
 - segments each corner into braking, rotation, and traction phases,
 - computes per-corner coaching metrics and ranking,
+- builds a deterministic coaching interpretation layer (symptom, cause, action, drill, confidence),
 - saves outputs for next stages.
 
 ## Saved Artifacts
@@ -107,6 +108,9 @@ Every run saves artifacts in a session-specific folder:
 - `outputs/<session-id>/corners/corner_ranking.csv`
 - `outputs/<session-id>/corners/corner_reference_profile.csv`
 - `outputs/<session-id>/corners/corner_report.json`
+- `outputs/<session-id>/coaching/corner_coaching.csv`
+- `outputs/<session-id>/coaching/session_coaching_summary.json`
+- `outputs/<session-id>/coaching/coaching_report.json`
 
 When `--reference-csv` is used, additional driver comparison outputs are saved at:
 - `outputs/<driver-session-id>/corners_vs_reference/corner_definitions.csv`
@@ -114,6 +118,9 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
 - `outputs/<driver-session-id>/corners_vs_reference/corner_ranking.csv`
 - `outputs/<driver-session-id>/corners_vs_reference/corner_reference_profile.csv`
 - `outputs/<driver-session-id>/corners_vs_reference/corner_report.json`
+- `outputs/<driver-session-id>/coaching_vs_reference/corner_coaching.csv`
+- `outputs/<driver-session-id>/coaching_vs_reference/session_coaching_summary.json`
+- `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.json`
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
 

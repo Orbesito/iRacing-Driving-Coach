@@ -17,6 +17,7 @@ from .corner_metrics import (
     compute_lap_times,
     detect_main_corners,
 )
+from .coaching import generate_coaching_outputs
 from .derived_channels import add_derived_units
 from .io_mu_csv import load_mu_csv
 from .lap_processing import (
@@ -28,6 +29,7 @@ from .lap_processing import (
 )
 from .persistence import (
     build_session_output_dir,
+    save_coaching_analysis,
     save_corner_analysis,
     save_lap_analysis,
     save_session_bundle,
@@ -262,6 +264,22 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
     for key, value in corner_paths.items():
         print(f"  {key}: {value}")
 
+    _progress("Building deterministic coaching layer")
+    corner_coaching_df, coaching_summary = generate_coaching_outputs(
+        corner_lap_metrics_df=corner_metrics,
+        corner_ranking_df=corner_ranking,
+        corner_report=corner_report,
+        mode_name="single_session",
+    )
+    coaching_paths = save_coaching_analysis(
+        session.output_dir / "coaching",
+        corner_coaching_df=corner_coaching_df,
+        session_summary=coaching_summary,
+    )
+    print("\nSaved coaching artifacts:")
+    for key, value in coaching_paths.items():
+        print(f"  {key}: {value}")
+
     print("\nTop coaching-priority corners:")
     top = corner_ranking.head(5)
     if top.empty:
@@ -381,6 +399,22 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
 
     print("\nSaved driver-vs-reference corner artifacts:")
     for key, value in driver_corner_paths.items():
+        print(f"  {key}: {value}")
+
+    _progress("Building deterministic coaching layer (driver vs reference)")
+    corner_coaching_df, coaching_summary = generate_coaching_outputs(
+        corner_lap_metrics_df=driver_corner_metrics,
+        corner_ranking_df=driver_corner_ranking,
+        corner_report=driver_corner_report,
+        mode_name="vs_reference_session",
+    )
+    coaching_paths = save_coaching_analysis(
+        driver_session.output_dir / "coaching_vs_reference",
+        corner_coaching_df=corner_coaching_df,
+        session_summary=coaching_summary,
+    )
+    print("\nSaved coaching artifacts:")
+    for key, value in coaching_paths.items():
         print(f"  {key}: {value}")
 
     print("\nTop coaching-priority corners vs reference:")

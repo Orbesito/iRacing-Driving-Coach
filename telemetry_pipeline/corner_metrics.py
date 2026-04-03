@@ -29,6 +29,26 @@ class CornerDetectionConfig:
 BRAKE_CHANNEL_PRIORITY = ["BrakeRaw", "Brake"]
 THROTTLE_CHANNEL_PRIORITY = ["ThrottleRaw", "Throttle"]
 WHEEL_SPEED_CHANNELS = ["LFspeed", "RFspeed", "LRspeed", "RRspeed"]
+REFERENCE_METRIC_MAP = {
+    "corner_time_s": "ref_corner_time_s",
+    "apex_speed_kmh": "ref_apex_speed_kmh",
+    "traction_reapply_delay_pct": "ref_traction_reapply_delay_pct",
+    "braking_time_s": "ref_braking_time_s",
+    "rotation_time_s": "ref_rotation_time_s",
+    "traction_time_s": "ref_traction_time_s",
+    "brake_peak_pct": "ref_brake_peak_pct",
+    "brake_mean_pct": "ref_brake_mean_pct",
+    "brake_raw_peak_pct": "ref_brake_raw_peak_pct",
+    "brake_raw_mean_pct": "ref_brake_raw_mean_pct",
+    "rotation_mean_abs_yaw_rate_deg_s": "ref_rotation_mean_abs_yaw_rate_deg_s",
+    "rotation_mean_abs_lat_accel_g": "ref_rotation_mean_abs_lat_accel_g",
+    "rotation_mean_abs_steer_deg": "ref_rotation_mean_abs_steer_deg",
+    "rotation_mean_body_slip_ratio": "ref_rotation_mean_body_slip_ratio",
+    "traction_exit_throttle_mean_pct": "ref_traction_exit_throttle_mean_pct",
+    "traction_exit_throttle_raw_mean_pct": "ref_traction_exit_throttle_raw_mean_pct",
+    "traction_exit_long_accel_mean": "ref_traction_exit_long_accel_mean",
+    "traction_wheel_speed_std_mps": "ref_traction_wheel_speed_std_mps",
+}
 
 
 def _lap_id_series(df: pd.DataFrame, lap_col: str = "Lap") -> pd.Series:
@@ -624,6 +644,15 @@ def compute_corner_lap_metrics(
                         if "LatAccel" in rotation_seg.columns
                         else np.nan
                     ),
+                    "rotation_mean_abs_steer_deg": (
+                        _safe_mean_abs(rotation_seg["SteeringWheelAngle_deg"])
+                        if "SteeringWheelAngle_deg" in rotation_seg.columns
+                        else (
+                            _safe_mean_abs(rotation_seg["SteeringWheelAngle"]) * 180.0 / np.pi
+                            if "SteeringWheelAngle" in rotation_seg.columns
+                            else np.nan
+                        )
+                    ),
                     "rotation_mean_body_slip_ratio": _body_slip_ratio_mean(rotation_seg),
                     "braking_mean_long_accel_g": (
                         _safe_mean(brake_seg["LongAccel"])
@@ -646,6 +675,18 @@ def compute_corner_lap_metrics(
     return pd.DataFrame(metric_rows)
 
 
+def _build_reference_profile_from_rows(reference_rows: pd.DataFrame) -> pd.DataFrame:
+    available_map = {
+        source_col: ref_col
+        for source_col, ref_col in REFERENCE_METRIC_MAP.items()
+        if source_col in reference_rows.columns
+    }
+    renamed = reference_rows.rename(columns=available_map).copy()
+    selected_cols = ["corner_id", "reference_corner_lap_id"] + list(available_map.values())
+    profile = renamed[selected_cols].copy()
+    return profile.sort_values("corner_id").reset_index(drop=True)
+
+
 def build_fastest_lap_corner_reference(
     corner_lap_metrics_df: pd.DataFrame,
     reference_lap_id: int,
@@ -662,21 +703,7 @@ def build_fastest_lap_corner_reference(
         )
 
     reference_rows["reference_corner_lap_id"] = int(reference_lap_id)
-    return reference_rows.rename(
-        columns={
-            "corner_time_s": "ref_corner_time_s",
-            "apex_speed_kmh": "ref_apex_speed_kmh",
-            "traction_reapply_delay_pct": "ref_traction_reapply_delay_pct",
-        }
-    )[
-        [
-            "corner_id",
-            "reference_corner_lap_id",
-            "ref_corner_time_s",
-            "ref_apex_speed_kmh",
-            "ref_traction_reapply_delay_pct",
-        ]
-    ]
+    return _build_reference_profile_from_rows(reference_rows)
 
 
 def build_best_per_corner_reference(corner_lap_metrics_df: pd.DataFrame) -> pd.DataFrame:
@@ -710,21 +737,7 @@ def build_best_per_corner_reference(corner_lap_metrics_df: pd.DataFrame) -> pd.D
         .copy()
     )
     best["reference_corner_lap_id"] = best["lap_id"].astype(int)
-    return best.rename(
-        columns={
-            "corner_time_s": "ref_corner_time_s",
-            "apex_speed_kmh": "ref_apex_speed_kmh",
-            "traction_reapply_delay_pct": "ref_traction_reapply_delay_pct",
-        }
-    )[
-        [
-            "corner_id",
-            "reference_corner_lap_id",
-            "ref_corner_time_s",
-            "ref_apex_speed_kmh",
-            "ref_traction_reapply_delay_pct",
-        ]
-    ]
+    return _build_reference_profile_from_rows(best)
 
 
 def apply_corner_reference(
@@ -750,7 +763,7 @@ def apply_corner_reference(
         )
 
     enriched = corner_lap_metrics_df.merge(
-        corner_reference_df[required_ref_cols], on="corner_id", how="left"
+        corner_reference_df, on="corner_id", how="left"
     )
     enriched["comparison_label"] = comparison_label
     enriched["time_loss_vs_ref_s"] = enriched["corner_time_s"] - enriched["ref_corner_time_s"]

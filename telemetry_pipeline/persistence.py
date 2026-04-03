@@ -194,3 +194,34 @@ def save_corner_analysis(
         "corner_reference_profile_csv": corner_reference_path,
         "corner_report_json": corner_report_path,
     }
+
+
+def save_coaching_analysis(
+    out_dir: str | Path,
+    corner_coaching_df: pd.DataFrame,
+    session_summary: dict,
+) -> Dict[str, Path]:
+    """
+    Persist deterministic coaching outputs for downstream reporting layers.
+    """
+    output_dir = Path(out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    corner_coaching_path = output_dir / "corner_coaching.csv"
+    session_summary_path = output_dir / "session_coaching_summary.json"
+    coaching_report_path = output_dir / "coaching_report.json"
+
+    corner_coaching_df.to_csv(corner_coaching_path, index=False)
+    _write_json(session_summary_path, session_summary)
+
+    coaching_report = {
+        "session_summary": session_summary,
+        "corner_coaching": corner_coaching_df.to_dict(orient="records"),
+    }
+    _write_json(coaching_report_path, coaching_report)
+
+    return {
+        "corner_coaching_csv": corner_coaching_path,
+        "session_summary_json": session_summary_path,
+        "coaching_report_json": coaching_report_path,
+    }

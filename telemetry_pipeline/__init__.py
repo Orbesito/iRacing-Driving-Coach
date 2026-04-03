@@ -12,6 +12,7 @@ from .corner_metrics import (
     compute_lap_times,
     detect_main_corners,
 )
+from .coaching import CoachingConfig, generate_coaching_outputs
 from .io_mu_csv import load_mu_csv
 from .lap_processing import (
     DEFAULT_DISTANCE_STEP_PCT,
@@ -22,6 +23,7 @@ from .lap_processing import (
 )
 from .persistence import (
     build_session_output_dir,
+    save_coaching_analysis,
     save_corner_analysis,
     save_lap_analysis,
     save_session_bundle,
@@ -34,6 +36,7 @@ __all__ = [
     "apply_corner_reference",
     "build_best_per_corner_reference",
     "build_corner_report",
+    "CoachingConfig",
     "compute_corner_lap_metrics",
     "compute_corner_metrics",
     "compute_lap_times",
@@ -45,6 +48,8 @@ __all__ = [
     "build_lap_summary",
     "get_valid_lap_ids",
     "load_mu_csv",
+    "generate_coaching_outputs",
+    "save_coaching_analysis",
     "save_corner_analysis",
     "save_lap_analysis",
     "save_session_bundle",
