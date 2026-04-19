@@ -171,6 +171,70 @@ Large trace tables are stored with lossless gzip compression (`.csv.gz`) to redu
   - optimal lap = sum of best `corner_time_s` across corners
   - potential gain = best full lap time minus theoretical optimal lap time
 
+## Configuration Tuning (Advanced)
+
+Default values are tuned for FIA-style road/street circuits.  
+If you analyze very different layouts (for example ovals), these are the main knobs to review.
+
+### 1) Corner detection (most important)
+
+File: `telemetry_pipeline/corner_metrics.py` (`CornerDetectionConfig`)
+
+- `min_corner_count`, `max_corner_count`, `target_corner_count`:
+  expected number of significant corners.
+  - Road/street: keep broad range or set track-specific target if known.
+  - Ovals: typically much lower counts (for example 2-6 depending on configuration).
+- `min_corner_spacing_m`, `min_corner_spacing_pct`:
+  minimum spacing between detected apexes.
+  - Increase to avoid over-splitting long-radius turns.
+  - Decrease slightly for tight technical complexes.
+- `activity_quantile_threshold`, `min_activity_score`:
+  sensitivity of peak acceptance.
+  - Increase for cleaner but fewer corner detections.
+  - Decrease if true corners are being missed.
+- `curvature_weight`:
+  balance between dynamic signals (yaw/lat accel/steer/speed deficit) and path geometry (`Lat`/`Lon`).
+  - Increase when geometric path is reliable and useful.
+  - Keep moderate to avoid geometry noise dominating.
+- `speed_apex_search_window_pct`:
+  local search window used to refine apex to minimum speed.
+
+### 2) Phase boundaries
+
+File: `telemetry_pipeline/corner_metrics.py` (`CornerDetectionConfig`)
+
+- `brake_threshold_pct`
+- `throttle_reapply_threshold_pct`
+- `throttle_reapply_consecutive_points`
+
+These control where braking/rotation/traction phases begin and end.  
+If pedal channels are noisier or differently scaled, these are the first values to retune.
+
+### 3) Lap validity and alignment
+
+File: `telemetry_pipeline/lap_processing.py`
+
+- `LapValidityConfig.min_samples`, `min_dist_span_pct`, `min_ontrack_fraction`, etc.
+- `DEFAULT_DISTANCE_STEP_PCT` (alignment resolution)
+
+Use stricter validity thresholds for cleaner datasets, or relax carefully for sparse telemetry.
+
+### 4) Coaching threshold sensitivity
+
+File: `telemetry_pipeline/coaching.py` (`CoachingConfig`)
+
+- `min_time_loss_s`, `min_inconsistency_s`, `min_priority_score`
+- `significant_*` thresholds (brake/rotation/traction/yaw/steer/slip/etc.)
+
+These values change how strict the coaching engine is when labeling an issue as meaningful.
+
+### 5) Known-track official turn counts
+
+File: `telemetry_pipeline/cli.py` (`_infer_expected_corner_count`)
+
+- If you want fixed official turn numbering for additional tracks, add mappings there.
+- If no mapping is defined, the detector runs in generic track-agnostic mode.
+
 ## Interpreting Confidence and Priority Score (Academic Use)
 
 - `coaching_priority_rank` orders corners by intervention value (1 = highest priority).

@@ -142,6 +142,8 @@ def _build_corner_snapshot(corner_rows: pd.DataFrame, ranking_row: pd.Series) ->
 
 
 def _phase_scores(snapshot: Dict[str, float], config: CoachingConfig) -> Dict[str, float]:
+    # Detect corners that are effectively no-brake phases so entry scoring
+    # does not falsely prioritize brake deltas.
     no_brake_corner = (
         np.isfinite(snapshot.get("brake_event_fraction", np.nan))
         and snapshot.get("brake_event_fraction", 1.0) < 0.30
@@ -322,6 +324,8 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
             or snapshot.get("ref_brake_peak_pct", 100.0) < config.significant_brake_delta_pct
         )
     )
+
+    # In lift/steer corners, avoid forcing "entry" as the primary coaching phase.
     if no_brake_corner and primary_phase == "entry":
         if phase_scores["mid"] >= phase_scores["exit"]:
             primary_phase = "mid"
@@ -421,6 +425,7 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
 
     coverage_ratio = available_signal_count / 9.0
     phase_strength = min(phase_scores[primary_phase], 3.0) / 3.0
+    # Confidence blends data coverage + phase signal strength + rule agreement.
     confidence_score = 0.30 + 0.35 * coverage_ratio + 0.20 * phase_strength + 0.10 * min(
         primary_signal_count, 3
     )

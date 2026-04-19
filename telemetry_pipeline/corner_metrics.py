@@ -11,22 +11,40 @@ import pandas as pd
 class CornerDetectionConfig:
     """
     Deterministic corner detection and phase boundary parameters.
+
+    Practical tuning guide:
+    - Road/street circuits: keep defaults as baseline.
+    - Ovals/high-speed layouts: usually lower min/max/target corner counts and
+      increase minimum corner spacing to avoid splitting long arcs.
+    - Low-speed technical tracks: sometimes benefit from slightly lower
+      spacing and/or lower activity threshold.
     """
 
+    # Signal smoothing / peak pre-processing.
     speed_smoothing_window_points: int = 9
     activity_smoothing_window_points: int = 5
     activity_quantile_threshold: float = 0.50
+
+    # Apex count and spacing controls (main track-type tuning knobs).
     min_corner_count: int = 10
     max_corner_count: int = 25
     min_corner_spacing_pct: float = 0.8
     min_corner_spacing_m: float = 90.0
+
+    # Apex refinement and minimum activity gate.
     speed_apex_search_window_pct: float = 1.5
     min_activity_score: float = 0.12
+
+    # Optional geometric curvature contribution from Lat/Lon.
     curvature_smoothing_window_points: int = 9
     curvature_weight: float = 0.35
+
+    # Phase splitting thresholds.
     brake_threshold_pct: float = 5.0
     throttle_reapply_threshold_pct: float = 10.0
     throttle_reapply_consecutive_points: int = 3
+
+    # Optional hard target corner count for tracks with known official count.
     target_corner_count: int | None = None
 
 
@@ -269,6 +287,7 @@ def _select_target_count_candidates(
         max_count=target_count,
     )
 
+    # If spacing is too strict to reach target_count, progressively relax it.
     while len(selected) < target_count and spacing > 0.2:
         spacing *= 0.85
         selected = _select_spaced_candidates(
@@ -278,6 +297,7 @@ def _select_target_count_candidates(
             max_count=target_count,
         )
 
+    # Final fallback: add highest-score leftovers with only minimal separation.
     if len(selected) < target_count:
         all_candidates = (
             candidates_df.sort_values(score_col, ascending=False)["distance_pct"]
@@ -292,6 +312,7 @@ def _select_target_count_candidates(
             if len(selected) >= target_count:
                 break
 
+    # Keep deterministic size/ordering if fallback overfilled the list.
     if len(selected) > target_count:
         selected_df = candidates_df.loc[
             candidates_df["distance_pct"].isin([round(x, 6) for x in selected])
@@ -454,6 +475,7 @@ def detect_main_corners(
         ref, smoothing_window_points=config.curvature_smoothing_window_points
     )
 
+    # Multi-signal activity profile: dynamics-first, curvature as optional aid.
     dynamic_activity = 0.35 * yaw_norm + 0.30 * lat_acc_norm + 0.20 * steer_norm + 0.15 * speed_norm
     curvature_weight = float(np.clip(config.curvature_weight, 0.0, 0.70))
     activity_raw = (1.0 - curvature_weight) * dynamic_activity + curvature_weight * curvature_norm
@@ -476,6 +498,7 @@ def detect_main_corners(
         if curvature[i] >= curvature[i - 1] and curvature[i] > curvature[i + 1]:
             peak_idx_curvature.append(i)
 
+    # Union of dynamic peaks + geometric peaks improves robustness across layouts.
     peak_idx = sorted(set(peak_idx_activity + peak_idx_curvature))
     if not peak_idx:
         peak_idx = [int(np.nanargmax(activity))]
@@ -493,6 +516,7 @@ def detect_main_corners(
 
     threshold_quantile = config.activity_quantile_threshold
     if config.target_corner_count is not None:
+        # With fixed target count, keep candidates broad and let spacing selection decide.
         threshold_quantile = min(threshold_quantile, 0.40)
     threshold = max(
         float(np.nanquantile(activity, threshold_quantile)),
@@ -514,6 +538,7 @@ def detect_main_corners(
     refined = []
     for _, peak in peak_candidates.iterrows():
         center = float(peak["distance_pct"])
+        # Refine each candidate to a local speed minimum around the activity peak.
         window = ref.loc[
             (ref["distance_pct"] >= center - config.speed_apex_search_window_pct)
             & (ref["distance_pct"] <= center + config.speed_apex_search_window_pct)
@@ -573,6 +598,7 @@ def detect_main_corners(
         )
 
         if len(apex_distances) < config.min_corner_count:
+            # Relax spacing in steps to avoid under-detecting technical complexes.
             spacing = min_spacing_pct
             while len(apex_distances) < config.min_corner_count and spacing > 0.25:
                 spacing *= 0.85
@@ -584,6 +610,7 @@ def detect_main_corners(
                 )
 
         if len(apex_distances) < config.min_corner_count:
+            # Deterministic fallback: force top-scored candidates up to minimum count.
             apex_distances = (
                 refined_df.sort_values("composite_score", ascending=False)
                 .head(config.min_corner_count)["distance_pct"]
@@ -677,6 +704,7 @@ def _segment_time_s(
     seg_unscaled = _time_integral_unscaled(segment)
     if not np.isfinite(seg_unscaled):
         return np.nan
+    # Segment time is obtained by scaling local 1/v integral with measured lap time.
     scale = lap_time_s / lap_unscaled_time
     return float(seg_unscaled * scale)
 
@@ -790,6 +818,7 @@ def compute_corner_lap_metrics(
         lap_df = aligned_laps_df.loc[aligned_laps_df["lap_id"] == lap_id].copy()
         lap_df = lap_df.sort_values("distance_pct")
         lap_time_s = float(lap_time_map.get(lap_id, np.nan))
+        # Lap-local normalization factor used to convert segment integrals to seconds.
         full_unscaled = _time_integral_unscaled(lap_df)
 
         for _, corner in corner_definitions_df.iterrows():
@@ -1019,6 +1048,7 @@ def apply_corner_reference(
         enriched["apex_position_delta_m"] = np.nan
 
     if exclude_reference_rows:
+        # Exclude benchmark rows so ranking reflects "driver vs reference", not reference vs itself.
         comparison = enriched.loc[
             enriched["lap_id"] != enriched["reference_corner_lap_id"]
         ].copy()
@@ -1049,6 +1079,7 @@ def apply_corner_reference(
     norm_variability = _normalise_positive(ranking["inconsistency_time_s"])
     norm_apex_speed_loss = _normalise_positive(ranking["mean_apex_speed_loss_kmh"])
 
+    # Priority emphasizes time loss first, then repeatability, then speed-at-apex context.
     ranking["coaching_relevance_score"] = (
         0.60 * norm_time_loss + 0.30 * norm_variability + 0.10 * norm_apex_speed_loss
     )

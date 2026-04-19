@@ -120,6 +120,7 @@ def build_lap_summary(
     def _evaluate_row(row: pd.Series) -> pd.Series:
         reasons: List[str] = []
 
+        # Keep validity rules explicit so every rejected lap is auditable.
         if row["lap_id"] < config.min_lap_id:
             reasons.append(f"lap_id_below_{config.min_lap_id}")
         if row["samples"] < config.min_samples:
@@ -203,6 +204,7 @@ def align_laps_by_distance(
         raise ValueError("No requested alignment channels are present in telemetry.")
 
     lap_id_col = _lap_id_series(df, lap_col)
+    # Fixed global distance grid is the basis for deterministic lap-to-lap overlays.
     distance_grid = np.arange(0.0, 100.0 + distance_step_pct / 2.0, distance_step_pct)
     distance_grid = np.round(distance_grid, 6)
 

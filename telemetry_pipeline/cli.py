@@ -216,7 +216,9 @@ def _infer_expected_corner_count(metadata: dict[str, str]) -> int | None:
 def _build_corner_detection_config(metadata: dict[str, str]) -> CornerDetectionConfig:
     expected_count = _infer_expected_corner_count(metadata)
     if expected_count is None:
+        # Generic track-agnostic defaults.
         return CornerDetectionConfig()
+    # When official turn count is known, lock detector to stable numbering.
     return CornerDetectionConfig(
         min_corner_count=expected_count,
         max_corner_count=expected_count,
