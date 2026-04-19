@@ -169,18 +169,23 @@ def save_corner_analysis(
 ) -> Dict[str, Path]:
     """
     Persist per-corner definitions, per-lap corner metrics, and coaching ranking outputs.
+    Large per-lap metrics table is stored as gzip-compressed CSV.
     """
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     corner_definitions_path = output_dir / "corner_definitions.csv"
-    corner_lap_metrics_path = output_dir / "corner_lap_metrics.csv"
+    corner_lap_metrics_path = output_dir / "corner_lap_metrics.csv.gz"
     corner_ranking_path = output_dir / "corner_ranking.csv"
     corner_reference_path = output_dir / "corner_reference_profile.csv"
     corner_report_path = output_dir / "corner_report.json"
 
     corner_definitions_df.to_csv(corner_definitions_path, index=False)
-    corner_lap_metrics_df.to_csv(corner_lap_metrics_path, index=False)
+    corner_lap_metrics_df.to_csv(
+        corner_lap_metrics_path,
+        index=False,
+        compression={"method": "gzip", "compresslevel": 5},
+    )
     corner_ranking_df.to_csv(corner_ranking_path, index=False)
     if corner_reference_df is None:
         corner_reference_df = pd.DataFrame(
@@ -204,6 +209,21 @@ def save_corner_analysis(
         "corner_reference_profile_csv": corner_reference_path,
         "corner_report_json": corner_report_path,
     }
+
+
+def save_config_snapshot(
+    out_dir: str | Path,
+    config_snapshot: dict,
+    filename: str = "config_snapshot.json",
+) -> Path:
+    """
+    Persist the resolved configuration used for this run.
+    """
+    output_dir = Path(out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / filename
+    _write_json(out_path, config_snapshot)
+    return out_path
 
 
 def save_coaching_analysis(

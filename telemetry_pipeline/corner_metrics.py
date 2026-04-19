@@ -737,6 +737,17 @@ def _safe_min(series: pd.Series) -> float:
     return float(series.min())
 
 
+def _safe_mad(series: pd.Series) -> float:
+    """
+    Median absolute deviation (MAD) as a robust spread metric.
+    """
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return np.nan
+    median = float(numeric.median())
+    return float((numeric - median).abs().median())
+
+
 def _normalise_positive(series: pd.Series) -> pd.Series:
     clipped = pd.to_numeric(series, errors="coerce").clip(lower=0.0).fillna(0.0)
     max_value = float(clipped.max())
@@ -1060,23 +1071,37 @@ def apply_corner_reference(
     agg = comparison.groupby(["corner_id", "corner_name"], dropna=False).agg(
         laps_compared=("lap_id", "nunique"),
         mean_time_loss_s=("time_loss_vs_ref_s", "mean"),
+        median_time_loss_s=("time_loss_vs_ref_s", "median"),
         std_time_loss_s=("time_loss_vs_ref_s", "std"),
+        mad_time_loss_s=("time_loss_vs_ref_s", _safe_mad),
         mean_abs_time_loss_s=("time_loss_vs_ref_s", lambda s: np.nanmean(np.abs(s))),
         inconsistency_time_s=("corner_time_s", "std"),
+        inconsistency_time_mad_s=("corner_time_s", _safe_mad),
         mean_apex_speed_loss_kmh=("apex_speed_loss_vs_ref_kmh", "mean"),
         mean_traction_delay_loss_pct=("traction_delay_vs_ref_pct", "mean"),
         mean_apex_position_delta_m=("apex_position_delta_m", "mean"),
     )
     ranking = agg.reset_index()
     ranking["std_time_loss_s"] = ranking["std_time_loss_s"].fillna(0.0)
+    ranking["median_time_loss_s"] = ranking["median_time_loss_s"].fillna(0.0)
+    ranking["mad_time_loss_s"] = ranking["mad_time_loss_s"].fillna(0.0)
     ranking["inconsistency_time_s"] = ranking["inconsistency_time_s"].fillna(0.0)
+    ranking["inconsistency_time_mad_s"] = ranking["inconsistency_time_mad_s"].fillna(0.0)
     ranking["mean_time_loss_s"] = ranking["mean_time_loss_s"].fillna(0.0)
     ranking["mean_apex_speed_loss_kmh"] = ranking["mean_apex_speed_loss_kmh"].fillna(0.0)
     ranking["mean_traction_delay_loss_pct"] = ranking["mean_traction_delay_loss_pct"].fillna(0.0)
     ranking["mean_apex_position_delta_m"] = ranking["mean_apex_position_delta_m"].fillna(0.0)
 
-    norm_time_loss = _normalise_positive(ranking["mean_time_loss_s"])
-    norm_variability = _normalise_positive(ranking["inconsistency_time_s"])
+    # Robust blends reduce outlier influence from a single anomalous lap.
+    ranking["time_loss_blended_s"] = (
+        0.60 * ranking["mean_time_loss_s"] + 0.40 * ranking["median_time_loss_s"]
+    )
+    ranking["inconsistency_blended_s"] = (
+        0.60 * ranking["inconsistency_time_s"] + 0.40 * ranking["inconsistency_time_mad_s"]
+    )
+
+    norm_time_loss = _normalise_positive(ranking["time_loss_blended_s"])
+    norm_variability = _normalise_positive(ranking["inconsistency_blended_s"])
     norm_apex_speed_loss = _normalise_positive(ranking["mean_apex_speed_loss_kmh"])
 
     # Priority emphasizes time loss first, then repeatability, then speed-at-apex context.
@@ -1120,8 +1145,8 @@ def build_corner_report(
         "apex_position_proxy_available": bool(apex_position_proxy_available),
         "trajectory_line_note": trajectory_note,
         "coaching_score_formula": (
-            "0.60*normalized(mean_time_loss_s) + "
-            "0.30*normalized(inconsistency_time_s) + "
+            "0.60*normalized(0.60*mean_time_loss_s + 0.40*median_time_loss_s) + "
+            "0.30*normalized(0.60*inconsistency_time_s + 0.40*inconsistency_time_mad_s) + "
             "0.10*normalized(mean_apex_speed_loss_kmh)"
         ),
         "channel_availability": {

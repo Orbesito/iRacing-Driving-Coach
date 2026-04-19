@@ -24,6 +24,7 @@ from .lap_processing import (
 )
 from .persistence import (
     build_session_output_dir,
+    save_config_snapshot,
     save_coaching_analysis,
     save_corner_analysis,
     save_lap_analysis,
@@ -51,6 +52,7 @@ __all__ = [
     "load_mu_csv",
     "generate_coaching_outputs",
     "generate_coaching_pdf",
+    "save_config_snapshot",
     "save_coaching_analysis",
     "save_corner_analysis",
     "save_lap_analysis",

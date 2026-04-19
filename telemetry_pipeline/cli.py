@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -18,7 +22,7 @@ from .corner_metrics import (
     compute_lap_times,
     detect_main_corners,
 )
-from .coaching import generate_coaching_outputs
+from .coaching import CoachingConfig, generate_coaching_outputs
 from .coaching_pdf import generate_coaching_pdf
 from .derived_channels import add_derived_units
 from .io_mu_csv import load_mu_csv
@@ -31,11 +35,15 @@ from .lap_processing import (
 )
 from .persistence import (
     build_session_output_dir,
+    save_config_snapshot,
     save_coaching_analysis,
     save_corner_analysis,
     save_lap_analysis,
     save_session_bundle,
 )
+
+
+TConfig = TypeVar("TConfig")
 
 
 @dataclass
@@ -53,8 +61,129 @@ class SessionAnalysis:
     output_dir: Path
 
 
+@dataclass(frozen=True)
+class RuntimeConfig:
+    lap_validity: LapValidityConfig
+    corner_detection: CornerDetectionConfig
+    coaching: CoachingConfig
+    allow_mixed_vehicle: bool
+    reference_cache_enabled: bool
+
+
 def _progress(message: str) -> None:
     print(f"\n... {message}", flush=True)
+
+
+def _default_runtime_config() -> RuntimeConfig:
+    return RuntimeConfig(
+        lap_validity=LapValidityConfig(),
+        corner_detection=CornerDetectionConfig(),
+        coaching=CoachingConfig(),
+        allow_mixed_vehicle=False,
+        reference_cache_enabled=True,
+    )
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _build_dataclass_config(
+    section_name: str,
+    section_payload: dict[str, Any] | None,
+    default_value: TConfig,
+) -> TConfig:
+    if section_payload is None:
+        return default_value
+    if not isinstance(section_payload, dict):
+        raise ValueError(f"Config section '{section_name}' must be a JSON object.")
+
+    field_names = {f.name for f in fields(type(default_value))}
+    unknown = set(section_payload.keys()) - field_names
+    if unknown:
+        raise ValueError(
+            f"Unknown keys in config section '{section_name}': {', '.join(sorted(unknown))}"
+        )
+    return type(default_value)(**section_payload)
+
+
+def _load_runtime_config(
+    config_path: Path | None,
+    cli_allow_mixed_vehicle: bool,
+    disable_reference_cache: bool,
+) -> tuple[RuntimeConfig, dict[str, Any]]:
+    runtime = _default_runtime_config()
+    config_payload: dict[str, Any] = {}
+
+    if config_path is not None:
+        config_payload = _read_json_file(config_path)
+        if not isinstance(config_payload, dict):
+            raise ValueError("Config file must contain a JSON object at top level.")
+
+        allowed_top = {"lap_validity", "corner_detection", "coaching", "comparison"}
+        unknown_top = set(config_payload.keys()) - allowed_top
+        if unknown_top:
+            raise ValueError(
+                "Unknown top-level config keys: " + ", ".join(sorted(unknown_top))
+            )
+
+        lap_validity = _build_dataclass_config(
+            "lap_validity",
+            config_payload.get("lap_validity"),
+            runtime.lap_validity,
+        )
+        corner_detection = _build_dataclass_config(
+            "corner_detection",
+            config_payload.get("corner_detection"),
+            runtime.corner_detection,
+        )
+        coaching_cfg = _build_dataclass_config(
+            "coaching",
+            config_payload.get("coaching"),
+            runtime.coaching,
+        )
+        comparison_payload = config_payload.get("comparison")
+        if comparison_payload is not None and not isinstance(comparison_payload, dict):
+            raise ValueError("Config section 'comparison' must be a JSON object.")
+        comparison_payload = comparison_payload or {}
+        allowed_comparison = {"allow_mixed_vehicle", "reference_cache_enabled"}
+        unknown_comparison = set(comparison_payload.keys()) - allowed_comparison
+        if unknown_comparison:
+            raise ValueError(
+                "Unknown keys in config section 'comparison': "
+                + ", ".join(sorted(unknown_comparison))
+            )
+
+        runtime = RuntimeConfig(
+            lap_validity=lap_validity,
+            corner_detection=corner_detection,
+            coaching=coaching_cfg,
+            allow_mixed_vehicle=bool(comparison_payload.get("allow_mixed_vehicle", False)),
+            reference_cache_enabled=bool(comparison_payload.get("reference_cache_enabled", True)),
+        )
+
+    if cli_allow_mixed_vehicle:
+        runtime = replace(runtime, allow_mixed_vehicle=True)
+    if disable_reference_cache:
+        runtime = replace(runtime, reference_cache_enabled=False)
+
+    return runtime, config_payload
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        while True:
+            chunk = file_obj.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _json_fingerprint(payload: dict[str, Any]) -> str:
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _empty_corner_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
@@ -108,6 +237,8 @@ def _analyze_single_session(
     csv_path: Path,
     label: str,
     output_base_dir: str | Path = "outputs",
+    lap_validity_config: LapValidityConfig | None = None,
+    output_dir_override: Path | None = None,
 ) -> SessionAnalysis:
     print(f"\n[{label}] Loading Mu CSV: {csv_path}")
     _progress(f"[{label}] Parsing Mu CSV metadata and telemetry")
@@ -120,7 +251,7 @@ def _analyze_single_session(
     _validate_required_channels(df)
 
     _progress(f"[{label}] Classifying valid laps")
-    validity_config = LapValidityConfig()
+    validity_config = lap_validity_config or LapValidityConfig()
     lap_summary = build_lap_summary(df, config=validity_config)
     valid_lap_ids = get_valid_lap_ids(lap_summary)
 
@@ -157,11 +288,14 @@ def _analyze_single_session(
     print(f"  distance_step_pct: {alignment_report['distance_step_pct']}")
     print(f"  distance_grid_points: {alignment_report['distance_grid_points']}")
 
-    out_dir = build_session_output_dir(
-        base_dir=output_base_dir,
-        source_csv=csv_path,
-        metadata=metadata,
-    )
+    if output_dir_override is not None:
+        out_dir = Path(output_dir_override)
+    else:
+        out_dir = build_session_output_dir(
+            base_dir=output_base_dir,
+            source_csv=csv_path,
+            metadata=metadata,
+        )
     _progress(f"[{label}] Saving session and lap artifacts")
     output_paths = save_session_bundle(
         out_dir,
@@ -213,20 +347,28 @@ def _infer_expected_corner_count(metadata: dict[str, str]) -> int | None:
     return None
 
 
-def _build_corner_detection_config(metadata: dict[str, str]) -> CornerDetectionConfig:
+def _build_corner_detection_config(
+    metadata: dict[str, str],
+    base_config: CornerDetectionConfig,
+) -> CornerDetectionConfig:
     expected_count = _infer_expected_corner_count(metadata)
     if expected_count is None:
         # Generic track-agnostic defaults.
-        return CornerDetectionConfig()
+        return base_config
     # When official turn count is known, lock detector to stable numbering.
-    return CornerDetectionConfig(
+    return replace(
+        base_config,
         min_corner_count=expected_count,
         max_corner_count=expected_count,
         target_corner_count=expected_count,
     )
 
 
-def _assert_same_track(driver_metadata: dict[str, str], reference_metadata: dict[str, str]) -> None:
+def _assert_compatible_sessions(
+    driver_metadata: dict[str, str],
+    reference_metadata: dict[str, str],
+    allow_mixed_vehicle: bool = False,
+) -> None:
     driver_venue = _normalise_text(driver_metadata.get("Venue", ""))
     reference_venue = _normalise_text(reference_metadata.get("Venue", ""))
     if driver_venue and reference_venue and driver_venue != reference_venue:
@@ -234,6 +376,22 @@ def _assert_same_track(driver_metadata: dict[str, str], reference_metadata: dict
             "Driver and reference sessions appear to be from different venues: "
             f"'{driver_metadata.get('Venue', '')}' vs '{reference_metadata.get('Venue', '')}'. "
             "For deterministic cross-session corner comparison, both inputs must be from the same track configuration."
+        )
+
+    driver_vehicle = _normalise_text(driver_metadata.get("Vehicle", ""))
+    reference_vehicle = _normalise_text(reference_metadata.get("Vehicle", ""))
+    if driver_vehicle and reference_vehicle and driver_vehicle != reference_vehicle:
+        if allow_mixed_vehicle:
+            print(
+                "\nWARNING: Mixed-vehicle comparison enabled. "
+                f"Driver vehicle '{driver_metadata.get('Vehicle', '')}' vs "
+                f"reference vehicle '{reference_metadata.get('Vehicle', '')}'."
+            )
+            return
+        raise ValueError(
+            "Driver and reference sessions use different vehicles: "
+            f"'{driver_metadata.get('Vehicle', '')}' vs '{reference_metadata.get('Vehicle', '')}'. "
+            "Use '--allow-mixed-vehicle' only if you intentionally want cross-car comparison."
         )
 
 
@@ -278,6 +436,157 @@ def _as_float_or_nan(value: object) -> float:
     except (TypeError, ValueError):
         return float("nan")
     return parsed if math.isfinite(parsed) else float("nan")
+
+
+def _first_existing_path(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_csv_any(path_candidates: list[Path]) -> pd.DataFrame:
+    path = _first_existing_path(path_candidates)
+    if path is None:
+        names = ", ".join(str(p) for p in path_candidates)
+        raise FileNotFoundError(f"Could not find any expected CSV artifact: {names}")
+    return pd.read_csv(path)
+
+
+def _load_session_analysis_from_output_dir(csv_path: Path, out_dir: Path) -> SessionAnalysis:
+    metadata = _read_json_file(out_dir / "metadata.json")
+    units = _read_json_file(out_dir / "units.json")
+    parse_report = _read_json_file(out_dir / "parse_report.json")
+
+    telemetry_df = _load_csv_any(
+        [out_dir / "telemetry_numeric.csv.gz", out_dir / "telemetry_numeric.csv"]
+    )
+    lap_summary = pd.read_csv(out_dir / "laps" / "lap_summary.csv")
+    aligned_laps = _load_csv_any(
+        [
+            out_dir / "laps" / "aligned_laps_by_distance.csv.gz",
+            out_dir / "laps" / "aligned_laps_by_distance.csv",
+        ]
+    )
+    alignment_report = _read_json_file(out_dir / "laps" / "alignment_report.json")
+    valid_lap_ids = get_valid_lap_ids(lap_summary)
+    lap_times = (
+        compute_lap_times(telemetry_df, valid_lap_ids)
+        if valid_lap_ids
+        else pd.DataFrame(columns=["lap_id", "start_time_s", "end_time_s", "lap_time_s"])
+    )
+
+    return SessionAnalysis(
+        csv_path=csv_path,
+        metadata=metadata,
+        units=units,
+        telemetry_df=telemetry_df,
+        parse_report=parse_report,
+        lap_summary=lap_summary,
+        valid_lap_ids=valid_lap_ids,
+        aligned_laps=aligned_laps,
+        alignment_report=alignment_report,
+        lap_times=lap_times,
+        output_dir=out_dir,
+    )
+
+
+def _get_or_build_reference_session_cached(
+    reference_csv_path: Path,
+    runtime_config: RuntimeConfig,
+) -> SessionAnalysis:
+    _progress("Resolving cached reference-session artifacts")
+    reference_hash = _sha256_file(reference_csv_path)
+    cache_inputs = {
+        "reference_sha256": reference_hash,
+        "lap_validity": asdict(runtime_config.lap_validity),
+        "distance_step_pct": DEFAULT_DISTANCE_STEP_PCT,
+    }
+    cache_key = _json_fingerprint(cache_inputs)[:24]
+    cache_dir = Path("outputs") / "_reference_cache" / cache_key
+    cache_manifest = cache_dir / "cache_manifest.json"
+
+    if cache_manifest.exists():
+        try:
+            _progress("Loading reference session from shared cache")
+            session = _load_session_analysis_from_output_dir(reference_csv_path, cache_dir)
+            print(f"\nReference cache hit: {cache_dir}")
+            return session
+        except Exception as exc:
+            print(f"\nReference cache load failed, rebuilding cache: {exc}")
+
+    _progress("Building reference-session cache artifacts")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    session = _analyze_single_session(
+        reference_csv_path,
+        label="Reference Session (cache build)",
+        output_base_dir="outputs",
+        lap_validity_config=runtime_config.lap_validity,
+        output_dir_override=cache_dir,
+    )
+    manifest = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "reference_csv": str(reference_csv_path),
+        "reference_sha256": reference_hash,
+        "cache_inputs": cache_inputs,
+        "cache_dir": str(cache_dir),
+    }
+    save_config_snapshot(cache_dir, manifest, filename="cache_manifest.json")
+    print(f"\nReference cache stored: {cache_dir}")
+    return session
+
+
+def _build_run_config_snapshot(
+    mode: str,
+    driver_session: SessionAnalysis,
+    runtime_config: RuntimeConfig,
+    config_file_path: Path | None,
+    cli_args: dict[str, Any],
+    reference_session: SessionAnalysis | None = None,
+) -> dict[str, Any]:
+    resolved_driver_corner_cfg = _build_corner_detection_config(
+        driver_session.metadata,
+        runtime_config.corner_detection,
+    )
+    resolved_reference_corner_cfg = (
+        _build_corner_detection_config(
+            reference_session.metadata,
+            runtime_config.corner_detection,
+        )
+        if reference_session is not None
+        else None
+    )
+
+    return {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "python_executable": sys.executable,
+        "config_file": str(config_file_path) if config_file_path is not None else None,
+        "cli_args": cli_args,
+        "base_config": {
+            "lap_validity": asdict(runtime_config.lap_validity),
+            "corner_detection": asdict(runtime_config.corner_detection),
+            "coaching": asdict(runtime_config.coaching),
+            "comparison": {
+                "allow_mixed_vehicle": runtime_config.allow_mixed_vehicle,
+                "reference_cache_enabled": runtime_config.reference_cache_enabled,
+            },
+        },
+        "resolved_config": {
+            "driver_corner_detection": asdict(resolved_driver_corner_cfg),
+            "reference_corner_detection": (
+                asdict(resolved_reference_corner_cfg)
+                if resolved_reference_corner_cfg is not None
+                else None
+            ),
+        },
+        "inputs": {
+            "driver_csv": str(driver_session.csv_path),
+            "reference_csv": str(reference_session.csv_path)
+            if reference_session is not None
+            else None,
+        },
+    }
 
 
 def _build_pdf_session_context(
@@ -334,7 +643,10 @@ def _build_pdf_session_context(
     return context
 
 
-def _run_single_session_mode(session: SessionAnalysis) -> None:
+def _run_single_session_mode(
+    session: SessionAnalysis,
+    runtime_config: RuntimeConfig,
+) -> None:
     print("\nRunning mode: single-session coaching analysis.")
     coached_best_lap_s = _best_lap_time_seconds(session.lap_times)
     coached_optimal_lap_s = float("nan")
@@ -345,7 +657,10 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
     else:
         detection_lap_id = choose_reference_lap(session.lap_times)
         print(f"Corner detection lap (fastest valid lap): {detection_lap_id}")
-        corner_config = _build_corner_detection_config(session.metadata)
+        corner_config = _build_corner_detection_config(
+            session.metadata,
+            runtime_config.corner_detection,
+        )
         _progress("Detecting main corners and phase boundaries")
         corner_definitions = detect_main_corners(
             aligned_laps_df=session.aligned_laps,
@@ -445,6 +760,7 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
         corner_ranking_df=corner_ranking,
         corner_report=corner_report,
         mode_name="single_session",
+        config=runtime_config.coaching,
     )
     coaching_summary["coached_best_lap_time_s"] = _format_time_seconds(coached_best_lap_s)
     coaching_summary["coached_optimal_lap_time_s"] = _format_time_seconds(coached_optimal_lap_s)
@@ -498,9 +814,17 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
         )
 
 
-def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: SessionAnalysis) -> None:
+def _run_vs_reference_mode(
+    driver_session: SessionAnalysis,
+    reference_session: SessionAnalysis,
+    runtime_config: RuntimeConfig,
+) -> None:
     print("\nRunning mode: driver session vs faster reference session.")
-    _assert_same_track(driver_session.metadata, reference_session.metadata)
+    _assert_compatible_sessions(
+        driver_session.metadata,
+        reference_session.metadata,
+        allow_mixed_vehicle=runtime_config.allow_mixed_vehicle,
+    )
     coached_best_lap_s = _best_lap_time_seconds(driver_session.lap_times)
     coached_optimal_lap_s = float("nan")
     coached_improvement_potential_s = float("nan")
@@ -522,7 +846,10 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
     else:
         reference_detection_lap_id = choose_reference_lap(reference_session.lap_times)
         print(f"Reference corner detection lap: {reference_detection_lap_id}")
-        corner_config = _build_corner_detection_config(reference_session.metadata)
+        corner_config = _build_corner_detection_config(
+            reference_session.metadata,
+            runtime_config.corner_detection,
+        )
 
         # Stable corner IDs: corner definitions are detected once on reference session
         # and then reused for both sessions.
@@ -719,6 +1046,7 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
         corner_ranking_df=driver_corner_ranking,
         corner_report=driver_corner_report,
         mode_name="vs_reference_session",
+        config=runtime_config.coaching,
     )
     coaching_summary["coached_best_lap_time_s"] = _format_time_seconds(coached_best_lap_s)
     coaching_summary["coached_optimal_lap_time_s"] = _format_time_seconds(coached_optimal_lap_s)
@@ -795,6 +1123,22 @@ def main() -> None:
         default=None,
         help="Optional faster-reference Mu CSV file. If provided, driver-vs-reference mode is used.",
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Optional JSON config file with lap_validity, corner_detection, coaching, and comparison settings.",
+    )
+    parser.add_argument(
+        "--allow-mixed-vehicle",
+        action="store_true",
+        help="Allow vs-reference comparison across different vehicles (off by default).",
+    )
+    parser.add_argument(
+        "--disable-reference-cache",
+        action="store_true",
+        help="Disable shared reference-session cache and always build reference artifacts in run-local output.",
+    )
     args = parser.parse_args()
 
     driver_csv_path = Path(args.csv_file)
@@ -805,24 +1149,81 @@ def main() -> None:
     if reference_csv_path is not None and not reference_csv_path.exists():
         raise FileNotFoundError(f"Reference file not found: {reference_csv_path}")
 
+    config_path = Path(args.config) if args.config else None
+    if config_path is not None and not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
     print(f"\nPython interpreter: {sys.executable}")
+    runtime_config, _ = _load_runtime_config(
+        config_path=config_path,
+        cli_allow_mixed_vehicle=bool(args.allow_mixed_vehicle),
+        disable_reference_cache=bool(args.disable_reference_cache),
+    )
+    print("\nConfiguration loaded:")
+    print(f"  config_file: {config_path if config_path is not None else 'defaults'}")
+    print(f"  allow_mixed_vehicle: {runtime_config.allow_mixed_vehicle}")
+    print(f"  reference_cache_enabled: {runtime_config.reference_cache_enabled}")
+
     driver_session = _analyze_single_session(
         driver_csv_path,
         label="Driver/Self Session",
         output_base_dir="outputs",
+        lap_validity_config=runtime_config.lap_validity,
     )
 
     if reference_csv_path is None:
-        _run_single_session_mode(driver_session)
+        snapshot = _build_run_config_snapshot(
+            mode="single_session",
+            driver_session=driver_session,
+            runtime_config=runtime_config,
+            config_file_path=config_path,
+            cli_args={
+                "csv_file": str(driver_csv_path),
+                "reference_csv": None,
+                "allow_mixed_vehicle": bool(args.allow_mixed_vehicle),
+                "disable_reference_cache": bool(args.disable_reference_cache),
+            },
+            reference_session=None,
+        )
+        snapshot_path = save_config_snapshot(driver_session.output_dir, snapshot)
+        print(f"\nSaved config snapshot: {snapshot_path}")
+        _run_single_session_mode(driver_session, runtime_config=runtime_config)
         return
 
-    reference_output_base = driver_session.output_dir / "comparison_reference_session"
-    reference_session = _analyze_single_session(
-        reference_csv_path,
-        label="Reference Session",
-        output_base_dir=reference_output_base,
+    if runtime_config.reference_cache_enabled:
+        reference_session = _get_or_build_reference_session_cached(
+            reference_csv_path=reference_csv_path,
+            runtime_config=runtime_config,
+        )
+    else:
+        reference_output_base = driver_session.output_dir / "comparison_reference_session"
+        reference_session = _analyze_single_session(
+            reference_csv_path,
+            label="Reference Session",
+            output_base_dir=reference_output_base,
+            lap_validity_config=runtime_config.lap_validity,
+        )
+
+    snapshot = _build_run_config_snapshot(
+        mode="vs_reference_session",
+        driver_session=driver_session,
+        runtime_config=runtime_config,
+        config_file_path=config_path,
+        cli_args={
+            "csv_file": str(driver_csv_path),
+            "reference_csv": str(reference_csv_path),
+            "allow_mixed_vehicle": bool(args.allow_mixed_vehicle),
+            "disable_reference_cache": bool(args.disable_reference_cache),
+        },
+        reference_session=reference_session,
     )
-    _run_vs_reference_mode(driver_session, reference_session)
+    snapshot_path = save_config_snapshot(driver_session.output_dir, snapshot)
+    print(f"\nSaved config snapshot: {snapshot_path}")
+    _run_vs_reference_mode(
+        driver_session,
+        reference_session,
+        runtime_config=runtime_config,
+    )
 
 
 if __name__ == "__main__":

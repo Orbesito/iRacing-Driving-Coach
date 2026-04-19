@@ -79,7 +79,51 @@ In this mode, the tool:
   - external reference driver best-corner trace,
   - coached driver best-corner trace (from the coached session).
 
-The comparison mode expects both files to be from the same track configuration.
+By default, comparison mode expects:
+- same track configuration (`Venue`)
+- same vehicle (`Vehicle`)
+
+If you intentionally want cross-car comparison, use:
+
+```powershell
+python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --reference-csv "C:\path\to\ref.csv" --allow-mixed-vehicle
+```
+
+### Optional Config File
+
+You can load deterministic tuning parameters from JSON:
+
+```powershell
+python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --config ".\pipeline_config.json"
+```
+
+Example `pipeline_config.json`:
+
+```json
+{
+  "lap_validity": {
+    "min_samples": 1000,
+    "min_dist_span_pct": 95.0
+  },
+  "corner_detection": {
+    "min_corner_count": 10,
+    "max_corner_count": 25,
+    "min_corner_spacing_m": 90.0,
+    "curvature_weight": 0.35
+  },
+  "coaching": {
+    "max_priority_corners": 5,
+    "min_time_loss_s": 0.03,
+    "min_inconsistency_s": 0.04
+  },
+  "comparison": {
+    "allow_mixed_vehicle": false,
+    "reference_cache_enabled": true
+  }
+}
+```
+
+A resolved `config_snapshot.json` is saved in each run folder for reproducibility.
 
 The script always:
 
@@ -109,10 +153,11 @@ Every run saves artifacts in a session-specific folder:
 - `outputs/<session-id>/laps/aligned_laps_by_distance.csv.gz`
 - `outputs/<session-id>/laps/alignment_report.json`
 - `outputs/<session-id>/corners/corner_definitions.csv`
-- `outputs/<session-id>/corners/corner_lap_metrics.csv`
+- `outputs/<session-id>/corners/corner_lap_metrics.csv.gz`
 - `outputs/<session-id>/corners/corner_ranking.csv`
 - `outputs/<session-id>/corners/corner_reference_profile.csv`
 - `outputs/<session-id>/corners/corner_report.json`
+- `outputs/<session-id>/config_snapshot.json`
 - `outputs/<session-id>/coaching/corner_coaching.csv`
 - `outputs/<session-id>/coaching/session_coaching_summary.json`
 - `outputs/<session-id>/coaching/coaching_report.json`
@@ -120,7 +165,7 @@ Every run saves artifacts in a session-specific folder:
 
 When `--reference-csv` is used, additional driver comparison outputs are saved at:
 - `outputs/<driver-session-id>/corners_vs_reference/corner_definitions.csv`
-- `outputs/<driver-session-id>/corners_vs_reference/corner_lap_metrics.csv`
+- `outputs/<driver-session-id>/corners_vs_reference/corner_lap_metrics.csv.gz`
 - `outputs/<driver-session-id>/corners_vs_reference/corner_ranking.csv`
 - `outputs/<driver-session-id>/corners_vs_reference/corner_reference_profile.csv`
 - `outputs/<driver-session-id>/corners_vs_reference/corner_report.json`
@@ -128,7 +173,10 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
 - `outputs/<driver-session-id>/coaching_vs_reference/session_coaching_summary.json`
 - `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.json`
 - `outputs/<driver-session-id>/coaching_report.pdf`
-- `outputs/<driver-session-id>/comparison_reference_session/<reference-session-id>/...` (reference-session ingestion/laps/corners artifacts used in the comparison run)
+- `outputs/_reference_cache/<cache-key>/...` (shared cached reference-session ingestion/laps/corners artifacts reused across runs)
+
+If cache is disabled (`--disable-reference-cache`), the reference artifacts are written under:
+- `outputs/<driver-session-id>/comparison_reference_session/<reference-session-id>/...`
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
 
@@ -166,6 +214,7 @@ Large trace tables are stored with lossless gzip compression (`.csv.gz`) to redu
 - Per-corner ranking supports:
   - time loss vs deterministic reference profile
   - variability / inconsistency
+  - robust ranking blend (mean + median for time loss, std + MAD for inconsistency)
   - combined coaching relevance score
 - The report also includes a deterministic theoretical optimal lap time:
   - optimal lap = sum of best `corner_time_s` across corners
