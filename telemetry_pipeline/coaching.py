@@ -214,7 +214,7 @@ def _entry_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[s
     ):
         return (
             "Entry speed is being over-suppressed.",
-            "Braking is too long and too aggressive versus the benchmark, so speed is dropped before apex.",
+            "Braking is too long and too aggressive relative to the reference, so speed is dropped before apex.",
             "Keep the initial brake hit but shorten the high-pressure phase and release progressively into turn-in.",
             "3 laps focusing on one clean brake release with no second brake squeeze.",
         )
@@ -229,7 +229,7 @@ def _entry_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[s
             "3 laps with a fixed earlier marker and focus on smooth release quality.",
         )
     return (
-        "Entry efficiency is below benchmark.",
+        "Entry phase is costing time versus reference.",
         "The corner starts with a speed deficit that carries into the rest of the phase.",
         "Focus on cleaner brake-release timing to carry minimum speed without destabilizing the car.",
         "Compare two consecutive laps and target identical release timing each lap.",
@@ -268,8 +268,8 @@ def _mid_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[str
             "3 laps at 95% entry aggression, then rebuild speed only if stability is maintained.",
         )
     return (
-        "Mid-corner efficiency is below target.",
-        "Rotation phase takes longer than benchmark and speed is not recovered early enough.",
+        "Mid-corner phase is costing time versus reference.",
+        "Rotation phase takes longer than reference and speed recovery starts too late.",
         "Prioritize earlier, cleaner rotation and earlier steering release at apex.",
         "Compare yaw trace consistency for this corner across 3 consecutive laps.",
     )
@@ -298,16 +298,16 @@ def _exit_advice(snapshot: Dict[str, float], config: CoachingConfig) -> Tuple[st
         )
     if snapshot["exit_long_accel_delta"] < -config.significant_exit_long_accel_delta:
         return (
-            "Exit acceleration is weaker than benchmark.",
+            "Exit acceleration is weaker than reference.",
             "Longitudinal acceleration is below reference through traction phase.",
             "Prioritize cleaner car placement at apex so throttle can be committed earlier and harder.",
             "Focus on one corner only and maximize clean full-throttle point repeatability.",
         )
     return (
-        "Exit conversion is below benchmark.",
-        "Time is being retained in the traction phase rather than released onto the following straight.",
-        "Prioritize throttle timing and ramp quality while keeping steering unwind continuous.",
-        "3 laps with attention only on full-throttle point consistency.",
+        "Exit phase is costing time onto the following straight.",
+        "Throttle commitment and steering unwind are not translating into early acceleration.",
+        "Commit throttle as steering opens, then build to full throttle with one smooth ramp.",
+        "3 laps: repeat the full-throttle point within +/-5 m with no second steering correction.",
     )
 
 
@@ -442,11 +442,11 @@ def _build_corner_advice(snapshot: Dict[str, float], config: CoachingConfig) -> 
     ] > config.significant_apex_position_delta_m:
         action = (
             action
-            + " Apex placement also differs from benchmark, so prioritize a repeatable entry-to-apex path."
+            + " Apex placement also differs from reference, so prioritize a repeatable entry-to-apex path."
         )
         cause = (
             cause
-            + " Positioning proxy indicates measurable apex-path offset versus benchmark."
+            + " Positioning proxy indicates measurable apex-path offset versus reference."
         )
 
     return {
@@ -466,17 +466,17 @@ def _build_track_usage_assessment(corner_report: Dict[str, object]) -> str:
         "apex_position_proxy_available", False
     ):
         return (
-            "Apex position deltas versus reference are available and used as a conservative positioning proxy. "
-            "Full entry/apex/exit line-shape analysis is not yet implemented, so positioning conclusions remain limited."
+            "Track-position assessment is active: apex position deltas versus reference are available as a conservative positioning signal. "
+            "Use these deltas together with steering and yaw overlays to improve entry-to-apex repeatability."
         )
     if corner_report.get("trajectory_line_feasible", False):
         return (
-            "Lat/Lon channels are available, but robust geometric line metrics are not yet active in this run. "
-            "Coaching remains centered on stronger brake/rotation/traction evidence."
+            "Lat/Lon channels are available in this run. Positioning can be reviewed in the overlays, "
+            "while coaching priority remains driven by brake/rotation/traction evidence."
         )
     return (
-        "Track-usage and line-quality assessment is limited: required geometric channels are not robustly "
-        "available in this run. Coaching focuses on stronger brake/rotation/traction evidence."
+        "Track-position assessment is limited in this run because geometric channels are unavailable. "
+        "Coaching focuses on brake/rotation/traction evidence."
     )
 
 
@@ -704,6 +704,7 @@ def generate_coaching_outputs(
             [
                 "corner_name",
                 "primary_phase",
+                "symptom",
                 "recommended_action",
                 "practice_focus",
                 "confidence_level",

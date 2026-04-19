@@ -206,6 +206,7 @@ def _plot_channel(
     y_label: str,
     x_label: str,
     show_legend: bool,
+    use_coached_labels: bool,
 ) -> None:
     if x_axis.size == 0:
         ax.text(0.5, 0.5, "No data available", ha="center", va="center")
@@ -227,8 +228,14 @@ def _plot_channel(
         iqr_color = "#1f77b4"
         iqr_alpha = 0.20
 
-    ax.plot(x_axis, median, color=median_color, linewidth=median_width, label="Driver median")
-    ax.fill_between(x_axis, q25, q75, color=iqr_color, alpha=iqr_alpha, label="Driver IQR")
+    median_label = "Coached median" if use_coached_labels else "Driver median"
+    iqr_label = "Coached IQR" if use_coached_labels else "Driver IQR"
+    coached_best_label = "Coached best lap" if use_coached_labels else "Coached best-corner lap"
+
+    reference_color = "#006400" if use_coached_labels else "#d62728"
+
+    ax.plot(x_axis, median, color=median_color, linewidth=median_width, label=median_label)
+    ax.fill_between(x_axis, q25, q75, color=iqr_color, alpha=iqr_alpha, label=iqr_label)
     if coached_ref_x_axis.size and coached_ref_values.size:
         ax.plot(
             coached_ref_x_axis,
@@ -236,14 +243,14 @@ def _plot_channel(
             color="#d62728",
             linewidth=2.0,
             linestyle="-.",
-            label="Coached best-corner lap",
+            label=coached_best_label,
             zorder=4,
         )
     if ref_x_axis.size and ref_values.size:
         ax.plot(
             ref_x_axis,
             ref_values,
-            color="#006400",
+            color=reference_color,
             linewidth=2.0,
             linestyle="--",
             label="Reference",
@@ -255,6 +262,23 @@ def _plot_channel(
     ax.grid(True, alpha=0.25)
     if show_legend:
         ax.legend(loc="best", fontsize=7)
+
+
+def _short_track_usage_assessment(full_text: object) -> str:
+    text = str(full_text or "").strip()
+    if not text:
+        return "n/a"
+
+    lowered = text.lower()
+    if "track-position assessment is active" in lowered or "apex position deltas" in lowered:
+        return "Track-position proxy active (apex delta vs reference)."
+    if "lat/lon channels are available" in lowered or "lat/lon" in lowered:
+        return "Track-position context available from Lat/Lon overlays."
+    if "limited" in lowered:
+        return "Track-position assessment limited in this run."
+    if len(text) > 120:
+        return text[:117].rstrip() + "..."
+    return text
 
 
 def _apply_brake_focus_xlim(
@@ -553,7 +577,6 @@ def generate_coaching_pdf(
         best_lap_s = session_context.get("coached_best_lap_time_s", "n/a")
         optimal_lap_s = session_context.get("coached_optimal_lap_time_s", "n/a")
         improvement_potential_s = session_context.get("coached_improvement_potential_s", "n/a")
-        expected_corners = session_context.get("expected_corner_count", "n/a")
         detected_corners = session_context.get("detected_corner_count", "n/a")
         reference_driver = session_context.get("reference_driver", "n/a")
         reference_vehicle = session_context.get("reference_vehicle", "n/a")
@@ -578,7 +601,7 @@ def generate_coaching_pdf(
             f"- Coached Best Lap: {best_lap_s}",
             f"- Coached Theoretical Optimal Lap: {optimal_lap_s}",
             f"- Coached Potential Gain (Best - Optimal): {improvement_potential_s}",
-            f"- Corner Model: detected {detected_corners}, expected {expected_corners}",
+            f"- Corner Model: detected {detected_corners} corners",
         ]
         if mode_name == "vs_reference_session":
             lines.extend(
@@ -591,23 +614,27 @@ def generate_coaching_pdf(
                     f"- Pairing: {coached_driver} (coached) vs {reference_driver} (reference)",
                 ]
             )
+        use_coached_labels = mode_name == "vs_reference_session"
+        median_legend_label = "Coached median" if use_coached_labels else "Driver median"
+        iqr_legend_label = "Coached IQR" if use_coached_labels else "Driver IQR"
+        coached_best_legend_label = "Coached best lap" if use_coached_labels else "Coached best-corner lap"
         lines.extend(
             [
                 "",
             f"Main Entry Issue: {session_summary.get('main_entry_issue', 'n/a')}",
             f"Main Mid-Corner Issue: {session_summary.get('main_mid_issue', 'n/a')}",
             f"Main Exit Issue: {session_summary.get('main_exit_issue', 'n/a')}",
-            f"Track Usage Assessment: {session_summary.get('track_usage_assessment', 'n/a')}",
+            f"Track Usage Assessment: {_short_track_usage_assessment(session_summary.get('track_usage_assessment', 'n/a'))}",
             "",
             "Graph Guide:",
             "- Orange background = braking phase.",
             "- Purple background = rotation / mid-corner phase.",
             "- Green background = traction / exit phase.",
             "- Vertical dotted line = apex point.",
-            "- Driver median = median trace across valid laps.",
-            "- Driver IQR = interquartile range (25th to 75th percentile) across valid laps.",
-            "- Coached best-corner lap (red dash-dot) = fastest corner segment achieved by the coached driver.",
-            "- Reference (green dashed) = external benchmark in vs-reference mode, or self benchmark in single-session mode.",
+            f"- {median_legend_label} = median trace across valid laps.",
+            f"- {iqr_legend_label} = interquartile range (25th to 75th percentile) across valid laps.",
+            f"- {coached_best_legend_label} (red dash-dot) = fastest corner segment achieved by the coached driver.",
+            "- Reference = green dashed in vs-reference mode, red dashed in single-session mode.",
             "- Brake panel auto-focuses to the active braking zone when long zero-brake sections dominate the window.",
             "- Throttle, steering, yaw-rate, and lateral-accel panels may auto-focus to active signal regions (speed keeps broader context).",
             "- X axis uses lap distance in meters when LapDist is available.",
@@ -618,14 +645,15 @@ def generate_coaching_pdf(
         top_priorities = session_summary.get("top_3_priorities", [])
         for idx, item in enumerate(top_priorities, start=1):
             practice_focus = item.get("practice_focus", item.get("drill_focus", "n/a"))
-            lines.append(
-                f"{idx}. {item.get('corner_name', 'n/a')} [{item.get('primary_phase', 'n/a')}] - "
-                f"{item.get('recommended_action', 'n/a')}"
-            )
+            lines.append(f"{idx}. {item.get('corner_name', 'n/a')} [{item.get('primary_phase', 'n/a')}]")
+            symptom = item.get("symptom")
+            if symptom:
+                lines.append(f"   Key Issue: {symptom}")
+            lines.append(f"   Priority Action: {item.get('recommended_action', 'n/a')}")
             lines.append(f"   Practice Focus: {practice_focus}")
-            concise = item.get("coaching_summary_concise")
-            if concise:
-                lines.append(f"   Note: {concise}")
+            confidence_level = item.get("confidence_level")
+            if confidence_level:
+                lines.append(f"   Confidence: {confidence_level}")
         summary_fig.text(0.04, 0.92, "\n".join(lines), va="top", fontsize=10, wrap=True)
         pdf.savefig(summary_fig, bbox_inches="tight")
         plt.close(summary_fig)
@@ -785,6 +813,7 @@ def generate_coaching_pdf(
                     y_label=unit,
                     x_label=x_label,
                     show_legend=True,
+                    use_coached_labels=mode_name == "vs_reference_session",
                 )
                 _draw_phase_markers(ax, phase_plot)
                 ax.set_xlim(x_min, x_max)
@@ -839,9 +868,9 @@ def generate_coaching_pdf(
                 else f"{reference_label} lap n/a"
             )
             coached_ref_text = (
-                f"Coached best-corner lap {coached_ref_lap_id}"
+                f"Coached best lap {coached_ref_lap_id}"
                 if coached_ref_lap_id is not None
-                else "Coached best-corner lap n/a"
+                else "Coached best lap n/a"
             )
             text_ax = fig.add_subplot(gs[3, :])
             text_ax.axis("off")
@@ -857,18 +886,22 @@ def generate_coaching_pdf(
                 ha="left",
                 transform=text_ax.transAxes,
             )
+            notes_y = 0.80
+            if mode_name == "vs_reference_session":
+                text_ax.text(
+                    0.0,
+                    0.80,
+                    wrapped_coached_ref,
+                    fontsize=9,
+                    va="top",
+                    ha="left",
+                    transform=text_ax.transAxes,
+                )
+                notes_y = 0.56
+
             text_ax.text(
                 0.0,
-                0.80,
-                wrapped_coached_ref,
-                fontsize=9,
-                va="top",
-                ha="left",
-                transform=text_ax.transAxes,
-            )
-            text_ax.text(
-                0.0,
-                0.56,
+                notes_y,
                 wrapped_notes,
                 fontsize=9,
                 va="top",

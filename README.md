@@ -101,12 +101,12 @@ The script always:
 
 Every run saves artifacts in a session-specific folder:
 
-- `outputs/<session-id>/telemetry_numeric.csv`
+- `outputs/<session-id>/telemetry_numeric.csv.gz`
 - `outputs/<session-id>/metadata.json`
 - `outputs/<session-id>/units.json`
 - `outputs/<session-id>/parse_report.json`
 - `outputs/<session-id>/laps/lap_summary.csv`
-- `outputs/<session-id>/laps/aligned_laps_by_distance.csv`
+- `outputs/<session-id>/laps/aligned_laps_by_distance.csv.gz`
 - `outputs/<session-id>/laps/alignment_report.json`
 - `outputs/<session-id>/corners/corner_definitions.csv`
 - `outputs/<session-id>/corners/corner_lap_metrics.csv`
@@ -116,7 +116,7 @@ Every run saves artifacts in a session-specific folder:
 - `outputs/<session-id>/coaching/corner_coaching.csv`
 - `outputs/<session-id>/coaching/session_coaching_summary.json`
 - `outputs/<session-id>/coaching/coaching_report.json`
-- `outputs/<session-id>/coaching/coaching_report.pdf`
+- `outputs/<session-id>/coaching_report.pdf`
 
 When `--reference-csv` is used, additional driver comparison outputs are saved at:
 - `outputs/<driver-session-id>/corners_vs_reference/corner_definitions.csv`
@@ -127,10 +127,12 @@ When `--reference-csv` is used, additional driver comparison outputs are saved a
 - `outputs/<driver-session-id>/coaching_vs_reference/corner_coaching.csv`
 - `outputs/<driver-session-id>/coaching_vs_reference/session_coaching_summary.json`
 - `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.json`
-- `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.pdf`
+- `outputs/<driver-session-id>/coaching_report.pdf`
 - `outputs/<driver-session-id>/comparison_reference_session/<reference-session-id>/...` (reference-session ingestion/laps/corners artifacts used in the comparison run)
 
 `<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
+
+Large trace tables are stored with lossless gzip compression (`.csv.gz`) to reduce disk usage on long sessions.
 
 ## Lap Comparison Approach
 

@@ -95,7 +95,7 @@ def save_session_bundle(
     Persist loaded session data for downstream pipeline steps.
 
     Outputs:
-    - telemetry_numeric.csv
+    - telemetry_numeric.csv.gz (lossless gzip compression)
     - metadata.json
     - units.json
     - parse_report.json
@@ -103,12 +103,16 @@ def save_session_bundle(
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    telemetry_path = output_dir / "telemetry_numeric.csv"
+    telemetry_path = output_dir / "telemetry_numeric.csv.gz"
     metadata_path = output_dir / "metadata.json"
     units_path = output_dir / "units.json"
     parse_report_path = output_dir / "parse_report.json"
 
-    telemetry_df.to_csv(telemetry_path, index=False)
+    telemetry_df.to_csv(
+        telemetry_path,
+        index=False,
+        compression={"method": "gzip", "compresslevel": 5},
+    )
     _write_json(metadata_path, metadata)
     _write_json(units_path, units_map)
     _write_json(parse_report_path, parse_report)
@@ -134,14 +138,18 @@ def save_lap_analysis(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     lap_summary_path = output_dir / "lap_summary.csv"
-    aligned_laps_path = output_dir / "aligned_laps_by_distance.csv"
+    aligned_laps_path = output_dir / "aligned_laps_by_distance.csv.gz"
     alignment_report_path = output_dir / "alignment_report.json"
 
     lap_summary_df.to_csv(lap_summary_path, index=False)
     if aligned_laps_df is None:
         aligned_laps_df = pd.DataFrame(columns=["lap_id", "distance_pct"])
 
-    aligned_laps_df.to_csv(aligned_laps_path, index=False)
+    aligned_laps_df.to_csv(
+        aligned_laps_path,
+        index=False,
+        compression={"method": "gzip", "compresslevel": 5},
+    )
     _write_json(alignment_report_path, alignment_report)
 
     return {

@@ -462,7 +462,7 @@ def _run_single_session_mode(session: SessionAnalysis) -> None:
             reference_session=None,
         )
         coaching_pdf_path = generate_coaching_pdf(
-            out_path=session.output_dir / "coaching" / "coaching_report.pdf",
+            out_path=session.output_dir / "coaching_report.pdf",
             mode_name="single_session",
             corner_coaching_df=corner_coaching_df,
             session_summary=coaching_summary,
@@ -743,7 +743,7 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
             reference_session=reference_session,
         )
         coaching_pdf_path = generate_coaching_pdf(
-            out_path=driver_session.output_dir / "coaching_vs_reference" / "coaching_report.pdf",
+            out_path=driver_session.output_dir / "coaching_report.pdf",
             mode_name="vs_reference_session",
             corner_coaching_df=corner_coaching_df,
             session_summary=coaching_summary,
