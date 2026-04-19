@@ -198,6 +198,8 @@ def _plot_channel(
     median: np.ndarray,
     q25: np.ndarray,
     q75: np.ndarray,
+    coached_ref_x_axis: np.ndarray,
+    coached_ref_values: np.ndarray,
     ref_x_axis: np.ndarray,
     ref_values: np.ndarray,
     label: str,
@@ -210,16 +212,280 @@ def _plot_channel(
         ax.set_title(label, fontsize=10)
         ax.grid(True, alpha=0.20)
         return
-    ax.plot(x_axis, median, color="#1f77b4", linewidth=1.8, label="Driver median")
-    ax.fill_between(x_axis, q25, q75, color="#1f77b4", alpha=0.20, label="Driver IQR")
+    has_reference_overlays = bool(
+        (coached_ref_x_axis.size and coached_ref_values.size)
+        or (ref_x_axis.size and ref_values.size)
+    )
+    if has_reference_overlays:
+        median_color = "#4c78a8"
+        median_width = 1.3
+        iqr_color = "#7f8c8d"
+        iqr_alpha = 0.15
+    else:
+        median_color = "#1f77b4"
+        median_width = 1.8
+        iqr_color = "#1f77b4"
+        iqr_alpha = 0.20
+
+    ax.plot(x_axis, median, color=median_color, linewidth=median_width, label="Driver median")
+    ax.fill_between(x_axis, q25, q75, color=iqr_color, alpha=iqr_alpha, label="Driver IQR")
+    if coached_ref_x_axis.size and coached_ref_values.size:
+        ax.plot(
+            coached_ref_x_axis,
+            coached_ref_values,
+            color="#d62728",
+            linewidth=2.0,
+            linestyle="-.",
+            label="Coached best-corner lap",
+            zorder=4,
+        )
     if ref_x_axis.size and ref_values.size:
-        ax.plot(ref_x_axis, ref_values, color="#d62728", linewidth=1.5, linestyle="--", label="Reference")
+        ax.plot(
+            ref_x_axis,
+            ref_values,
+            color="#006400",
+            linewidth=2.0,
+            linestyle="--",
+            label="Reference",
+            zorder=5,
+        )
     ax.set_title(label, fontsize=10)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.grid(True, alpha=0.25)
     if show_legend:
         ax.legend(loc="best", fontsize=7)
+
+
+def _apply_brake_focus_xlim(
+    ax: Any,
+    base_x_min: float,
+    base_x_max: float,
+    trace_items: List[Tuple[np.ndarray, np.ndarray]],
+    threshold_pct: float = 2.0,
+) -> None:
+    """
+    For long windows with mostly zero-brake sections, zoom to active brake usage.
+    """
+    base_span = float(base_x_max - base_x_min)
+    if not np.isfinite(base_span) or base_span <= 0.0:
+        return
+
+    active_points: List[float] = []
+    for x_vals, y_vals in trace_items:
+        if x_vals.size == 0 or y_vals.size == 0:
+            continue
+        n = min(x_vals.size, y_vals.size)
+        x = np.asarray(x_vals[:n], dtype=float)
+        y = np.asarray(y_vals[:n], dtype=float)
+        mask = np.isfinite(x) & np.isfinite(y) & (y >= threshold_pct)
+        if mask.any():
+            active_points.extend(x[mask].tolist())
+
+    if len(active_points) < 3:
+        return
+
+    active_min = float(np.nanmin(active_points))
+    active_max = float(np.nanmax(active_points))
+    active_span = float(active_max - active_min)
+    if active_span <= 0.0:
+        return
+
+    # Keep default full window when brake already fills most of the panel.
+    if active_span / base_span >= 0.80:
+        return
+
+    margin = max(0.02 * base_span, 0.12 * active_span)
+    zoom_min = max(base_x_min, active_min - margin)
+    zoom_max = min(base_x_max, active_max + margin)
+    if zoom_max - zoom_min < 0.10 * base_span:
+        return
+    ax.set_xlim(zoom_min, zoom_max)
+
+
+def _active_points_for_channel(
+    channel_col: str,
+    x_vals: np.ndarray,
+    y_vals: np.ndarray,
+) -> np.ndarray:
+    if x_vals.size == 0 or y_vals.size == 0:
+        return np.array([], dtype=float)
+
+    n = min(x_vals.size, y_vals.size)
+    x = np.asarray(x_vals[:n], dtype=float)
+    y = np.asarray(y_vals[:n], dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = x[finite]
+    y = y[finite]
+    if x.size < 3:
+        return np.array([], dtype=float)
+
+    active = np.zeros(x.size, dtype=bool)
+
+    if channel_col == "plot_throttle_pct":
+        in_transition = (y > 3.0) & (y < 97.0)
+        dy = np.abs(np.diff(y))
+        grad_threshold = max(1.5, float(np.nanquantile(dy, 0.90)) * 0.60)
+        grad_mask = dy >= grad_threshold
+        grad_points = np.zeros_like(active)
+        grad_points[1:] = grad_mask
+        grad_points[:-1] |= grad_mask
+        active = in_transition | grad_points
+    elif channel_col == "plot_steer_deg":
+        abs_y = np.abs(y)
+        peak = float(np.nanquantile(abs_y, 0.95))
+        amp_threshold = max(3.0, 0.25 * peak)
+        active = abs_y >= amp_threshold
+        dy = np.abs(np.diff(y))
+        grad_threshold = max(1.2, float(np.nanquantile(dy, 0.90)) * 0.60)
+        grad_mask = dy >= grad_threshold
+        active[1:] |= grad_mask
+        active[:-1] |= grad_mask
+    elif channel_col == "plot_yaw_deg_s":
+        abs_y = np.abs(y)
+        peak = float(np.nanquantile(abs_y, 0.95))
+        amp_threshold = max(1.5, 0.25 * peak)
+        active = abs_y >= amp_threshold
+        dy = np.abs(np.diff(y))
+        grad_threshold = max(0.6, float(np.nanquantile(dy, 0.90)) * 0.60)
+        grad_mask = dy >= grad_threshold
+        active[1:] |= grad_mask
+        active[:-1] |= grad_mask
+    elif channel_col == "plot_lat_accel_g":
+        abs_y = np.abs(y)
+        peak = float(np.nanquantile(abs_y, 0.95))
+        amp_threshold = max(0.12, 0.25 * peak)
+        active = abs_y >= amp_threshold
+        dy = np.abs(np.diff(y))
+        grad_threshold = max(0.04, float(np.nanquantile(dy, 0.90)) * 0.60)
+        grad_mask = dy >= grad_threshold
+        active[1:] |= grad_mask
+        active[:-1] |= grad_mask
+    else:
+        return np.array([], dtype=float)
+
+    return x[active]
+
+
+def _apply_signal_focus_xlim(
+    ax: Any,
+    channel_col: str,
+    base_x_min: float,
+    base_x_max: float,
+    trace_items: List[Tuple[np.ndarray, np.ndarray]],
+    phase_positions: Dict[str, float],
+) -> None:
+    """
+    Channel-specific focus window for non-speed panels.
+    Keeps context while improving readability when useful activity occupies a small region.
+    """
+    base_span = float(base_x_max - base_x_min)
+    if not np.isfinite(base_span) or base_span <= 0.0:
+        return
+
+    active_points: List[float] = []
+    for x_vals, y_vals in trace_items:
+        pts = _active_points_for_channel(channel_col, x_vals, y_vals)
+        if pts.size:
+            active_points.extend(pts.tolist())
+
+    # Anchor focus around corner core phases so zoom remains interpretable.
+    if channel_col == "plot_throttle_pct":
+        for key in ["brake_start", "apex", "traction_start"]:
+            value = float(phase_positions.get(key, np.nan))
+            if np.isfinite(value):
+                active_points.append(value)
+    else:
+        for key in ["rotation_start", "apex", "traction_start"]:
+            value = float(phase_positions.get(key, np.nan))
+            if np.isfinite(value):
+                active_points.append(value)
+
+    if len(active_points) < 3:
+        return
+
+    active_arr = np.asarray(active_points, dtype=float)
+    active_arr = active_arr[np.isfinite(active_arr)]
+    if active_arr.size < 3:
+        return
+
+    # Focus on the primary corner event and reject distant secondary events.
+    apex_x = float(phase_positions.get("apex", np.nan))
+    brake_start_x = float(phase_positions.get("brake_start", np.nan))
+    rotation_start_x = float(phase_positions.get("rotation_start", np.nan))
+    rotation_end_x = float(phase_positions.get("rotation_end", np.nan))
+    traction_start_x = float(phase_positions.get("traction_start", np.nan))
+
+    finite_starts = [v for v in [brake_start_x, rotation_start_x, apex_x] if np.isfinite(v)]
+    finite_ends = [v for v in [traction_start_x, rotation_end_x, apex_x] if np.isfinite(v)]
+    if finite_starts and finite_ends:
+        if channel_col == "plot_throttle_pct":
+            gate_pre = 0.08 * base_span
+            gate_post = 0.22 * base_span
+        else:
+            gate_pre = 0.10 * base_span
+            gate_post = 0.18 * base_span
+        gate_min = max(base_x_min, min(finite_starts) - gate_pre)
+        gate_max = min(base_x_max, max(finite_ends) + gate_post)
+        gated = active_arr[(active_arr >= gate_min) & (active_arr <= gate_max)]
+        if gated.size >= 3:
+            active_arr = gated
+
+    if active_arr.size < 3:
+        return
+
+    active_min = float(np.nanmin(active_arr))
+    active_max = float(np.nanmax(active_arr))
+    active_span = float(active_max - active_min)
+    if active_span <= 0.0:
+        return
+
+    # Avoid over-zooming when the active region already occupies most of the panel.
+    if active_span / base_span >= 0.88:
+        return
+
+    if channel_col == "plot_throttle_pct":
+        pre_margin = max(0.03 * base_span, 0.16 * active_span)
+        post_margin = max(0.06 * base_span, 0.28 * active_span)
+        min_zoom_span = 0.30 * base_span
+        max_zoom_span = 0.55 * base_span
+    elif channel_col == "plot_lat_accel_g":
+        pre_margin = max(0.03 * base_span, 0.14 * active_span)
+        post_margin = max(0.04 * base_span, 0.14 * active_span)
+        min_zoom_span = 0.22 * base_span
+        max_zoom_span = 0.36 * base_span
+    else:
+        pre_margin = max(0.03 * base_span, 0.15 * active_span)
+        post_margin = max(0.04 * base_span, 0.15 * active_span)
+        min_zoom_span = 0.24 * base_span
+        max_zoom_span = 0.42 * base_span
+
+    zoom_min = max(base_x_min, active_min - pre_margin)
+    zoom_max = min(base_x_max, active_max + post_margin)
+    zoom_span = float(zoom_max - zoom_min)
+    if zoom_span <= 0.0:
+        return
+
+    if zoom_span > max_zoom_span:
+        center = float(np.nanmedian(active_arr))
+        if np.isfinite(apex_x):
+            center = 0.65 * apex_x + 0.35 * center
+        half = 0.5 * max_zoom_span
+        zoom_min = max(base_x_min, center - half)
+        zoom_max = min(base_x_max, center + half)
+        if zoom_max - zoom_min < 0.16 * base_span:
+            return
+        zoom_span = float(zoom_max - zoom_min)
+
+    if zoom_span < min_zoom_span:
+        center = 0.5 * (zoom_min + zoom_max)
+        half_span = 0.5 * min_zoom_span
+        zoom_min = max(base_x_min, center - half_span)
+        zoom_max = min(base_x_max, center + half_span)
+        if zoom_max - zoom_min < 0.20 * base_span:
+            return
+
+    ax.set_xlim(zoom_min, zoom_max)
 
 
 def _draw_phase_markers(ax: Any, phase: Dict[str, float]) -> None:
@@ -241,6 +507,7 @@ def generate_coaching_pdf(
     corner_definitions_df: pd.DataFrame,
     aligned_laps_df: pd.DataFrame,
     corner_reference_df: pd.DataFrame,
+    coached_corner_reference_df: pd.DataFrame | None = None,
     reference_aligned_laps_df: pd.DataFrame | None = None,
     max_corner_pages: int = 5,
     session_context: Dict[str, object] | None = None,
@@ -339,6 +606,10 @@ def generate_coaching_pdf(
             "- Vertical dotted line = apex point.",
             "- Driver median = median trace across valid laps.",
             "- Driver IQR = interquartile range (25th to 75th percentile) across valid laps.",
+            "- Coached best-corner lap (red dash-dot) = fastest corner segment achieved by the coached driver.",
+            "- Reference (green dashed) = external benchmark in vs-reference mode, or self benchmark in single-session mode.",
+            "- Brake panel auto-focuses to the active braking zone when long zero-brake sections dominate the window.",
+            "- Throttle, steering, yaw-rate, and lateral-accel panels may auto-focus to active signal regions (speed keeps broader context).",
             "- X axis uses lap distance in meters when LapDist is available.",
             "",
             "Top 3 Priorities:",
@@ -410,6 +681,13 @@ def generate_coaching_pdf(
             ref_rows = corner_reference_df.loc[corner_reference_df["corner_id"] == corner_id]
             if not ref_rows.empty and "reference_corner_lap_id" in ref_rows.columns:
                 ref_lap_id = int(ref_rows.iloc[0]["reference_corner_lap_id"])
+            coached_ref_lap_id = None
+            if coached_corner_reference_df is not None and not coached_corner_reference_df.empty:
+                coached_rows = coached_corner_reference_df.loc[
+                    coached_corner_reference_df["corner_id"] == corner_id
+                ]
+                if not coached_rows.empty and "reference_corner_lap_id" in coached_rows.columns:
+                    coached_ref_lap_id = int(coached_rows.iloc[0]["reference_corner_lap_id"])
 
             fig = plt.figure(figsize=(15.5, 10.5))
             gs = fig.add_gridspec(
@@ -444,6 +722,31 @@ def generate_coaching_pdf(
 
                 ref_x_axis = np.array([])
                 ref_values = np.array([])
+                coached_ref_x_axis = np.array([])
+                coached_ref_values = np.array([])
+                if coached_ref_lap_id is not None:
+                    coached_ref_x, coached_ref_y = _reference_trace(
+                        reference_df=driver_plot_df,
+                        fallback_df=driver_plot_df,
+                        reference_lap_id=coached_ref_lap_id,
+                        window_start_pct=w_start,
+                        window_end_pct=w_end,
+                        value_col=channel_col,
+                    )
+                    if use_meter_axis:
+                        coached_ref_x_numeric = np.asarray(coached_ref_x, dtype=float)
+                        if coached_ref_x_numeric.size and np.nanmax(coached_ref_x_numeric) <= 100.0:
+                            coached_ref_x_m = _pct_to_m(coached_ref_x_numeric, map_pct, map_m)
+                            if coached_ref_x_m.size and np.isfinite(coached_ref_x_m).sum() >= 2:
+                                coached_ref_x_axis = coached_ref_x_m
+                            else:
+                                coached_ref_x_axis = coached_ref_x_numeric
+                        else:
+                            coached_ref_x_axis = coached_ref_x_numeric
+                    else:
+                        coached_ref_x_axis = np.asarray(coached_ref_x, dtype=float)
+                    coached_ref_values = coached_ref_y
+
                 if ref_lap_id is not None:
                     ref_x, ref_y = _reference_trace(
                         reference_df=reference_plot_df,
@@ -474,6 +777,8 @@ def generate_coaching_pdf(
                     median=median,
                     q25=q25,
                     q75=q75,
+                    coached_ref_x_axis=coached_ref_x_axis,
+                    coached_ref_values=coached_ref_values,
                     ref_x_axis=ref_x_axis,
                     ref_values=ref_values,
                     label=title,
@@ -483,6 +788,35 @@ def generate_coaching_pdf(
                 )
                 _draw_phase_markers(ax, phase_plot)
                 ax.set_xlim(x_min, x_max)
+                if channel_col == "plot_brake_pct":
+                    _apply_brake_focus_xlim(
+                        ax=ax,
+                        base_x_min=x_min,
+                        base_x_max=x_max,
+                        trace_items=[
+                            (x_axis, median),
+                            (coached_ref_x_axis, coached_ref_values),
+                            (ref_x_axis, ref_values),
+                        ],
+                    )
+                elif channel_col in {
+                    "plot_throttle_pct",
+                    "plot_steer_deg",
+                    "plot_yaw_deg_s",
+                    "plot_lat_accel_g",
+                }:
+                    _apply_signal_focus_xlim(
+                        ax=ax,
+                        channel_col=channel_col,
+                        base_x_min=x_min,
+                        base_x_max=x_max,
+                        trace_items=[
+                            (x_axis, median),
+                            (coached_ref_x_axis, coached_ref_values),
+                            (ref_x_axis, ref_values),
+                        ],
+                        phase_positions=phase_plot,
+                    )
 
             for idx in range(len(channels), len(axes)):
                 axes[idx].set_visible(False)
@@ -504,10 +838,16 @@ def generate_coaching_pdf(
                 if ref_lap_id is not None
                 else f"{reference_label} lap n/a"
             )
+            coached_ref_text = (
+                f"Coached best-corner lap {coached_ref_lap_id}"
+                if coached_ref_lap_id is not None
+                else "Coached best-corner lap n/a"
+            )
             text_ax = fig.add_subplot(gs[3, :])
             text_ax.axis("off")
             wrapped_notes = textwrap.fill(f"Coaching Summary: {detailed_note}", width=220)
             wrapped_ref = textwrap.fill(f"Reference Segment Used: {ref_lap_text}", width=220)
+            wrapped_coached_ref = textwrap.fill(f"Coached Segment Used: {coached_ref_text}", width=220)
             text_ax.text(
                 0.0,
                 0.98,
@@ -519,7 +859,16 @@ def generate_coaching_pdf(
             )
             text_ax.text(
                 0.0,
-                0.65,
+                0.80,
+                wrapped_coached_ref,
+                fontsize=9,
+                va="top",
+                ha="left",
+                transform=text_ax.transAxes,
+            )
+            text_ax.text(
+                0.0,
+                0.56,
                 wrapped_notes,
                 fontsize=9,
                 va="top",

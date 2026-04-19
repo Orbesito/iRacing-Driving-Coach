@@ -74,7 +74,10 @@ In this mode, the tool:
 - detects corners on the reference session,
 - uses those corner IDs/boundaries as stable canonical corners for both sessions,
 - builds a per-corner benchmark from the reference session best corner segments,
-- compares your session against that benchmark turn by turn.
+- compares your session against that benchmark turn by turn,
+- and in PDF corner plots overlays both:
+  - external reference driver best-corner trace,
+  - coached driver best-corner trace (from the coached session).
 
 The comparison mode expects both files to be from the same track configuration.
 

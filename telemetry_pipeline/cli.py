@@ -505,6 +505,7 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
     reference_best_lap_s = _best_lap_time_seconds(reference_session.lap_times)
     reference_optimal_lap_s = float("nan")
     reference_improvement_potential_s = float("nan")
+    coached_corner_profile_for_plots = pd.DataFrame()
 
     if (
         driver_session.aligned_laps.empty
@@ -605,6 +606,8 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
             corner_definitions_df=canonical_corner_definitions,
             lap_times_df=driver_session.lap_times,
         )
+        _progress("Building coached-driver best-per-corner profile for plot overlays")
+        coached_corner_profile_for_plots = build_best_per_corner_reference(driver_raw_metrics)
         coached_optimal_lap_s = _compute_optimal_lap_time_seconds(driver_raw_metrics)
         if math.isfinite(coached_best_lap_s) and math.isfinite(coached_optimal_lap_s):
             coached_improvement_potential_s = max(
@@ -747,6 +750,7 @@ def _run_vs_reference_mode(driver_session: SessionAnalysis, reference_session: S
             corner_definitions_df=driver_corner_definitions,
             aligned_laps_df=driver_session.aligned_laps,
             corner_reference_df=reference_corner_profile,
+            coached_corner_reference_df=coached_corner_profile_for_plots,
             reference_aligned_laps_df=reference_session.aligned_laps,
             session_context=pdf_context,
         )
