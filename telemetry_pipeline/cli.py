@@ -1118,7 +1118,8 @@ def main() -> None:
         help="Path to the driver's (or self) Mu-exported CSV file.",
     )
     parser.add_argument(
-        "--reference-csv",
+        "--vs-reference",
+        dest="reference_csv",
         type=str,
         default=None,
         help="Optional faster-reference Mu CSV file. If provided, driver-vs-reference mode is used.",

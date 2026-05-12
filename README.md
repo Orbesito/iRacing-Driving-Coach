@@ -1,46 +1,72 @@
 # iRacing-Driving-Coach
 
-Deterministic telemetry ingestion for Mu-exported iRacing sessions.
+Deterministic driver-coaching pipeline for Mu-exported iRacing telemetry.
+
+## Project Overview
+
+This project analyzes iRacing telemetry and automatically produces actionable coaching outputs from a single command, keeping the core logic deterministic and auditable.
+
+It is designed for users who may not be experts in telemetry analysis and are interested in improving their laptime and data driven training techniques.
+
+Main outcomes:
+- Valid-lap filtering and distance-aligned lap comparison.
+- Per-corner braking, rotation, and traction analysis.
+- Corner ranking by time loss and inconsistency.
+- Structured coaching comments with confidence.
+- Automatic coaching PDF report generation.
+
+The software supports two operation modes:
+1. `single-session`: Analyze one driver session against that driver's own best-corner benchmark.
+2. `vs-reference`: Compare a coached driver session against a faster reference driver session.
+
+## External Tools and Boundary
+
+- Mu is an external prerequisite and is required to convert iRacing `.ibt` files to `.csv`.
+- Mu is not replaced or reimplemented by this project.
+- Optional MoTeC i2 files can be produced from Mu for visual validation, but MoTeC is not the computation engine.
+
+Mu credit and download:
+- [Mu (v1.9.5.0) by Patrick Moore](https://github.com/patrickmoore/Mu/releases/tag/1.9.5.0).
 
 ## Prerequisites (Final User)
 
 1. Windows terminal (PowerShell or CMD).
-2. Python 3.10+ installed and available in terminal:
-   - `python --version`
-   - if `python` is not available, try `py --version`
-3. Mu installed (external prerequisite) and able to export iRacing `.ibt` files to `.csv`.
+2. Python 3.10+ installed and available in terminal.
+3. Mu installed and able to export iRacing telemetry to CSV.
+
+Check Python:
+- `python --version`.
+- `py --version` if `python` is not available.
 
 ## Install Python (If Needed)
 
 1. Install Python 3.10+ on Windows.
-2. During installation, enable `Add python.exe to PATH`.
-3. Re-open terminal and verify:
-   - `python --version`
-   - or `py --version`
+2. Enable `Add python.exe to PATH` during installation.
+3. Re-open terminal and verify the version.
 
 ## Install Mu (If Needed)
 
-1. Install Mu telemetry utility on your Windows machine.
-2. Use Mu to convert iRacing `.ibt` files to `.csv`.
-3. Confirm the exported CSV follows the format documented below.
+1. Install Mu from the link above.
+2. Convert iRacing `.ibt` files to `.csv`.
+3. Confirm Mu CSV format follows the expected structure documented below.
 
 ## Install Dependencies
 
-From this project folder, run one of:
+From this project folder:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-or:
+Or:
 
 ```powershell
 py -m pip install -r requirements.txt
 ```
 
-## Run
+## Quick Start
 
-### Mode 1: Single-Session Analysis (Your Session Only)
+### Mode 1: Single-Session (Your Session Only)
 
 ```powershell
 python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv"
@@ -52,52 +78,60 @@ If `python` is not available:
 py .\TelemetryAnalyzer.py "C:\path\to\my_session.csv"
 ```
 
-In this mode, the tool:
-- detects corners from your session,
-- computes per-corner metrics for every valid lap,
-- builds the reference per corner from the best corner segment across your valid laps,
-- ranks coaching-priority corners by time loss, variability, and relevance score.
+What this mode does:
+- Detects corners from your own session.
+- Computes per-corner metrics for all valid laps.
+- Builds a best-per-corner internal benchmark.
+- Ranks priority corners by time loss, variability, and relevance score.
+- Generates coaching CSV/JSON outputs.
+- Generates a coaching PDF report (`coaching_report.pdf`).
 
-### Mode 2: Driver vs Faster Reference Driver
+### Mode 2: Coached Driver vs Faster Reference Driver
 
 ```powershell
-python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --reference-csv "C:\path\to\faster_driver_session.csv"
+python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --vs-reference "C:\path\to\faster_driver_session.csv"
 ```
 
 If `python` is not available:
 
 ```powershell
-py .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --reference-csv "C:\path\to\faster_driver_session.csv"
+py .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --vs-reference "C:\path\to\faster_driver_session.csv"
 ```
 
-In this mode, the tool:
-- detects corners on the reference session,
-- uses those corner IDs/boundaries as stable canonical corners for both sessions,
-- builds a per-corner benchmark from the reference session best corner segments,
-- compares your session against that benchmark turn by turn,
-- and in PDF corner plots overlays both:
-  - external reference driver best-corner trace,
-  - coached driver best-corner trace (from the coached session).
+What this mode does:
+- Detects canonical corners on the reference session.
+- Reuses those corner IDs and boundaries for the coached driver session.
+- Builds reference benchmark from best corner segments in the reference session.
+- Scores coached driver corner performance vs reference benchmark.
+- Generates coaching CSV/JSON outputs.
+- Generates a coaching PDF report (`coaching_report.pdf`) with overlays.
+- Shows coached median and coached IQR traces.
+- Shows coached best-corner lap trace.
+- Shows reference trace.
 
-By default, comparison mode expects:
-- same track configuration (`Venue`)
-- same vehicle (`Vehicle`)
+By default, this mode expects:
+- Same track configuration (`Venue`).
+- Same vehicle (`Vehicle`).
 
-If you intentionally want cross-car comparison, use:
+Intentional cross-car comparison:
 
 ```powershell
-python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --reference-csv "C:\path\to\ref.csv" --allow-mixed-vehicle
+python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --vs-reference "C:\path\to\ref.csv" --allow-mixed-vehicle
 ```
 
-### Optional Config File
+## Optional Runtime Flags
 
-You can load deterministic tuning parameters from JSON:
+- `--config <path>` loads deterministic tuning parameters from JSON.
+- `--allow-mixed-vehicle` allows cross-car comparison in `vs-reference` mode.
+- `--disable-reference-cache` disables shared cached reference-session artifacts.
+
+Example:
 
 ```powershell
 python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --config ".\pipeline_config.json"
 ```
 
-Example `pipeline_config.json`:
+## Example Config File
 
 ```json
 {
@@ -123,64 +157,68 @@ Example `pipeline_config.json`:
 }
 ```
 
-A resolved `config_snapshot.json` is saved in each run folder for reproducibility.
+The resolved runtime configuration is always saved to:
+- `outputs/<session-id>/config_snapshot.json`.
 
-The script always:
+## What the Program Always Does
 
-- applies derived channels,
-- detects valid laps deterministically,
-- ignores out/warm-up and short/partial laps,
-- aligns valid laps by distance (`LapDistPct`),
-- includes acceleration channels (`LatAccel`, `LongAccel`) in analysis,
-- includes additional high-value dynamics channels in aligned outputs (`BrakeRaw`, `ThrottleRaw`, wheel speeds, velocity components, `VertAccel`, `Lat`, `Lon`),
-- detects corners from a deterministic multi-signal profile (speed, yaw, lateral accel, steering, and path curvature when Lat/Lon is available),
-- segments each corner into braking, rotation, and traction phases,
-- computes per-corner coaching metrics and ranking,
-- builds a deterministic coaching interpretation layer (symptom, cause, action, drill, confidence),
-- writes both concise and detailed coaching notes per priority corner,
-- generates a coaching PDF report with channel overlays (speed, brake, throttle, steering, yaw rate, lateral acceleration),
-- saves outputs for next stages.
+- Parses metadata, units, and numeric telemetry from Mu CSV.
+- Preserves raw channels and adds derived channels separately.
+- Classifies valid and invalid laps deterministically.
+- Excludes out, warm-up, partial, and contaminated laps by explicit rules.
+- Aligns valid laps by distance (`LapDistPct`) on a shared grid.
+- Detects corners from a deterministic multi-signal profile.
+- Segments each corner into braking, rotation, and traction phases.
+- Computes per-corner metrics and coaching relevance ranking.
+- Generates deterministic coaching comments with evidence and confidence.
+- Writes reproducible artifacts (CSV/JSON/GZ).
+- Generates PDF coaching report.
 
 ## Saved Artifacts
 
-Every run saves artifacts in a session-specific folder:
+Every run writes to a session-specific folder:
+- `outputs/<session-id>/...`.
 
-- `outputs/<session-id>/telemetry_numeric.csv.gz`
-- `outputs/<session-id>/metadata.json`
-- `outputs/<session-id>/units.json`
-- `outputs/<session-id>/parse_report.json`
-- `outputs/<session-id>/laps/lap_summary.csv`
-- `outputs/<session-id>/laps/aligned_laps_by_distance.csv.gz`
-- `outputs/<session-id>/laps/alignment_report.json`
-- `outputs/<session-id>/corners/corner_definitions.csv`
-- `outputs/<session-id>/corners/corner_lap_metrics.csv.gz`
-- `outputs/<session-id>/corners/corner_ranking.csv`
-- `outputs/<session-id>/corners/corner_reference_profile.csv`
-- `outputs/<session-id>/corners/corner_report.json`
-- `outputs/<session-id>/config_snapshot.json`
-- `outputs/<session-id>/coaching/corner_coaching.csv`
-- `outputs/<session-id>/coaching/session_coaching_summary.json`
-- `outputs/<session-id>/coaching/coaching_report.json`
-- `outputs/<session-id>/coaching_report.pdf`
+Core artifacts:
+- `telemetry_numeric.csv.gz`.
+- `metadata.json`.
+- `units.json`.
+- `parse_report.json`.
+- `laps/lap_summary.csv`.
+- `laps/aligned_laps_by_distance.csv.gz`.
+- `laps/alignment_report.json`.
+- `config_snapshot.json`.
+- `coaching_report.pdf`.
 
-When `--reference-csv` is used, additional driver comparison outputs are saved at:
-- `outputs/<driver-session-id>/corners_vs_reference/corner_definitions.csv`
-- `outputs/<driver-session-id>/corners_vs_reference/corner_lap_metrics.csv.gz`
-- `outputs/<driver-session-id>/corners_vs_reference/corner_ranking.csv`
-- `outputs/<driver-session-id>/corners_vs_reference/corner_reference_profile.csv`
-- `outputs/<driver-session-id>/corners_vs_reference/corner_report.json`
-- `outputs/<driver-session-id>/coaching_vs_reference/corner_coaching.csv`
-- `outputs/<driver-session-id>/coaching_vs_reference/session_coaching_summary.json`
-- `outputs/<driver-session-id>/coaching_vs_reference/coaching_report.json`
-- `outputs/<driver-session-id>/coaching_report.pdf`
-- `outputs/_reference_cache/<cache-key>/...` (shared cached reference-session ingestion/laps/corners artifacts reused across runs)
+Single-session analysis outputs:
+- `corners/corner_definitions.csv`.
+- `corners/corner_lap_metrics.csv.gz`.
+- `corners/corner_ranking.csv`.
+- `corners/corner_reference_profile.csv`.
+- `corners/corner_report.json`.
+- `coaching/corner_coaching.csv`.
+- `coaching/session_coaching_summary.json`.
+- `coaching/coaching_report.json`.
 
-If cache is disabled (`--disable-reference-cache`), the reference artifacts are written under:
-- `outputs/<driver-session-id>/comparison_reference_session/<reference-session-id>/...`
+Vs-reference additional outputs:
+- `corners_vs_reference/corner_definitions.csv`.
+- `corners_vs_reference/corner_lap_metrics.csv.gz`.
+- `corners_vs_reference/corner_ranking.csv`.
+- `corners_vs_reference/corner_reference_profile.csv`.
+- `corners_vs_reference/corner_report.json`.
+- `coaching_vs_reference/corner_coaching.csv`.
+- `coaching_vs_reference/session_coaching_summary.json`.
+- `coaching_vs_reference/coaching_report.json`.
 
-`<session-id>` is auto-built from metadata (date, time, vehicle, venue, session, driver), so different sessions do not overwrite each other.
+Reference cache outputs (when enabled):
+- `outputs/_reference_cache/<cache-key>/...`.
 
-Large trace tables are stored with lossless gzip compression (`.csv.gz`) to reduce disk usage on long sessions.
+If cache is disabled:
+- `outputs/<driver-session-id>/comparison_reference_session/<reference-session-id>/...`.
+
+Additional notes:
+- `<session-id>` is auto-built from metadata (date/time/vehicle/venue/session/driver).
+- Large tables are stored as `.csv.gz` to reduce disk usage without data loss.
 
 ## Lap Comparison Approach
 
@@ -309,8 +347,7 @@ File: `telemetry_pipeline/cli.py` (`_infer_expected_corner_count`)
 
 ## Mu Export Format Expected
 
-The CSV should contain:
-
+Mu CSV must contain:
 1. Metadata lines at the top.
 2. One blank line.
 3. Header row.
@@ -319,18 +356,17 @@ The CSV should contain:
 
 ## Troubleshooting
 
-- `ModuleNotFoundError: No module named 'pandas'`:
-  - install with the same interpreter you use to run the script:
-    - `python -m pip install pandas`
-    - or `py -m pip install pandas`
-- `Missing dependency: matplotlib` (PDF report):
-  - install with the same interpreter you use to run the script:
-    - `python -m pip install matplotlib`
-    - or `py -m pip install matplotlib`
-- `File not found`:
-  - check the CSV path and quotes.
+- `ModuleNotFoundError: No module named 'pandas'`.
+- Install with `python -m pip install pandas`.
+- Install with `py -m pip install pandas` if needed.
+- `Missing dependency: matplotlib`.
+- Install with `python -m pip install matplotlib`.
+- Install with `py -m pip install matplotlib` if needed.
+- `File not found`.
+- Check CSV path and quotes.
 
-## Notes
+## Final Notes
 
-- Mu is not replaced by this project; Mu is required to produce the CSV input.
-- Raw channels are preserved. Derived channels are added separately (`Speed_kmh`, `SteeringWheelAngle_deg`, `YawRate_deg_s`).
+- Mu is mandatory for `.ibt` to `.csv` conversion.
+- This project starts after conversion and performs deterministic telemetry analytics and coaching.
+- Raw telemetry channels are preserved, and derived channels are added separately (`Speed_kmh`, `SteeringWheelAngle_deg`, `YawRate_deg_s`).
