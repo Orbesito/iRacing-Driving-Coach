@@ -47,6 +47,10 @@ class CornerDetectionConfig:
     # Optional hard target corner count for tracks with known official count.
     target_corner_count: int | None = None
 
+    # Optional official turn map. When provided, these apex percentages replace
+    # automatic peak selection but still use telemetry-derived phase boundaries.
+    manual_apex_pct: List[float] | None = None
+
 
 BRAKE_CHANNEL_PRIORITY = ["BrakeRaw", "Brake"]
 THROTTLE_CHANNEL_PRIORITY = ["ThrottleRaw", "Throttle"]
@@ -578,48 +582,64 @@ def detect_main_corners(
         .sort_values("distance_pct")
     )
 
-    min_spacing_pct = _effective_min_corner_spacing_pct(ref, config)
-
-    target_count = config.target_corner_count
-    if target_count is not None:
-        target_count = int(np.clip(target_count, config.min_corner_count, config.max_corner_count))
-        apex_distances = _select_target_count_candidates(
-            refined_df,
-            score_col="composite_score",
-            target_count=target_count,
-            initial_spacing_pct=min_spacing_pct,
+    manual_apex_pct = config.manual_apex_pct or []
+    if manual_apex_pct:
+        apex_distances = sorted(
+            {
+                round(float(value), 6)
+                for value in manual_apex_pct
+                if np.isfinite(float(value)) and 0.0 <= float(value) <= 100.0
+            }
         )
+        target_count = config.target_corner_count
+        if target_count is not None and len(apex_distances) != int(target_count):
+            raise ValueError(
+                "manual_apex_pct length must match target_corner_count "
+                f"({len(apex_distances)} provided, {target_count} expected)."
+            )
     else:
-        apex_distances = _select_spaced_candidates(
-            refined_df,
-            score_col="composite_score",
-            min_spacing_pct=min_spacing_pct,
-            max_count=config.max_corner_count,
-        )
+        min_spacing_pct = _effective_min_corner_spacing_pct(ref, config)
 
-        if len(apex_distances) < config.min_corner_count:
-            # Relax spacing in steps to avoid under-detecting technical complexes.
-            spacing = min_spacing_pct
-            while len(apex_distances) < config.min_corner_count and spacing > 0.25:
-                spacing *= 0.85
-                apex_distances = _select_spaced_candidates(
-                    refined_df,
-                    score_col="composite_score",
-                    min_spacing_pct=spacing,
-                    max_count=config.max_corner_count,
-                )
-
-        if len(apex_distances) < config.min_corner_count:
-            # Deterministic fallback: force top-scored candidates up to minimum count.
-            apex_distances = (
-                refined_df.sort_values("composite_score", ascending=False)
-                .head(config.min_corner_count)["distance_pct"]
-                .astype(float)
-                .sort_values()
-                .tolist()
+        target_count = config.target_corner_count
+        if target_count is not None:
+            target_count = int(np.clip(target_count, config.min_corner_count, config.max_corner_count))
+            apex_distances = _select_target_count_candidates(
+                refined_df,
+                score_col="composite_score",
+                target_count=target_count,
+                initial_spacing_pct=min_spacing_pct,
+            )
+        else:
+            apex_distances = _select_spaced_candidates(
+                refined_df,
+                score_col="composite_score",
+                min_spacing_pct=min_spacing_pct,
+                max_count=config.max_corner_count,
             )
 
-        apex_distances = sorted(apex_distances[: config.max_corner_count])
+            if len(apex_distances) < config.min_corner_count:
+                # Relax spacing in steps to avoid under-detecting technical complexes.
+                spacing = min_spacing_pct
+                while len(apex_distances) < config.min_corner_count and spacing > 0.25:
+                    spacing *= 0.85
+                    apex_distances = _select_spaced_candidates(
+                        refined_df,
+                        score_col="composite_score",
+                        min_spacing_pct=spacing,
+                        max_count=config.max_corner_count,
+                    )
+
+            if len(apex_distances) < config.min_corner_count:
+                # Deterministic fallback: force top-scored candidates up to minimum count.
+                apex_distances = (
+                    refined_df.sort_values("composite_score", ascending=False)
+                    .head(config.min_corner_count)["distance_pct"]
+                    .astype(float)
+                    .sort_values()
+                    .tolist()
+                )
+
+            apex_distances = sorted(apex_distances[: config.max_corner_count])
     if not apex_distances:
         raise ValueError("Corner detection failed to produce any apex points.")
 

@@ -143,7 +143,8 @@ python .\TelemetryAnalyzer.py "C:\path\to\my_session.csv" --config ".\pipeline_c
     "min_corner_count": 10,
     "max_corner_count": 25,
     "min_corner_spacing_m": 90.0,
-    "curvature_weight": 0.35
+    "curvature_weight": 0.35,
+    "manual_apex_pct": null
   },
   "coaching": {
     "max_priority_corners": 5,
@@ -285,6 +286,11 @@ File: `telemetry_pipeline/corner_metrics.py` (`CornerDetectionConfig`)
   - Keep moderate to avoid geometry noise dominating.
 - `speed_apex_search_window_pct`:
   local search window used to refine apex to minimum speed.
+- `manual_apex_pct`:
+  optional list of official corner apex positions in percentage lap distance.
+  - Use only when a circuit has been validated against onboard video, MoTeC, or an official map.
+  - When provided, automatic peak selection is bypassed, but braking, rotation, traction phases and all metrics are still computed from telemetry.
+  - This is useful for official turn numbering on circuits where small labelled turns do not always create clean standalone telemetry apexes.
 
 ### 2) Phase boundaries
 
