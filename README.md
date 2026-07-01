@@ -19,6 +19,30 @@ The software supports two operation modes:
 1. `single-session`: Analyze one driver session against that driver's own best-corner benchmark.
 2. `vs-reference`: Compare a coached driver session against a faster reference driver session.
 
+## Example Outputs
+
+The final output is a coaching report that combines telemetry plots with deterministic driver-coaching comments. The screenshots below show the same corner format in the two supported modes.
+
+Plot guide:
+- Orange background: braking phase.
+- Purple background: rotation / mid-corner phase.
+- Green background: traction / exit phase.
+- Vertical dotted line: detected apex.
+- Blue line and grey band: coached driver median and interquartile range across valid laps.
+- Red line: coached driver's best lap or best-corner segment.
+- Green dashed line: faster reference driver in `vs-reference` mode.
+
+<p align="center">
+  <img src="Report_single.png" alt="Single-session coaching report example" width="49%">
+  <img src="Report_reference.png" alt="Driver versus reference coaching report example" width="49%">
+</p>
+
+Left: `single-session` report. Right: `vs-reference` report.
+
+Full example PDF reports are included in the repository:
+- `coaching_report_single.pdf`.
+- `coaching_report_reference.pdf`.
+
 ## External Tools and Boundary
 
 - Mu is an external prerequisite and is required to convert iRacing `.ibt` files to `.csv`.
