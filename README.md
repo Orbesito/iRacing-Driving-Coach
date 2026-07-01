@@ -32,12 +32,17 @@ Plot guide:
 - Red line: coached driver's best lap or best-corner segment.
 - Green dashed line: faster reference driver in `vs-reference` mode.
 
+**Single-session example**
+
 <p align="center">
-  <img src="Report_single.png" alt="Single-session coaching report example" width="49%">
-  <img src="Report_reference.png" alt="Driver versus reference coaching report example" width="49%">
+  <img src="Report_single.png" alt="Single-session coaching report example" width="95%">
 </p>
 
-Left: `single-session` report. Right: `vs-reference` report.
+**Driver vs reference example**
+
+<p align="center">
+  <img src="Report_reference.png" alt="Driver versus reference coaching report example" width="95%">
+</p>
 
 Full example PDF reports are included in the repository:
 - `coaching_report_single.pdf`.
