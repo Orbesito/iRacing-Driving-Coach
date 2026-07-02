@@ -1,6 +1,6 @@
 # iRacing-Driving-Coach
 
-Deterministic driver-coaching pipeline for Mu-exported iRacing telemetry.
+A deterministic Python tool for iRacing telemetry analysis and automated driver coaching. It processes Mu-exported telemetry, compares laps and drivers, identifies time loss in braking, rotation and traction, and generates an automatic coaching report.
 
 ## Project Overview
 
